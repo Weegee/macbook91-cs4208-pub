@@ -1,0 +1,50 @@
+# SPDX-License-Identifier: GPL-2.0-or-later
+# Hashes of every file the build is allowed to take from outside this
+# repository, and of the two files that are derived from them by patch.
+#
+#   <tag>  <sha256>  <path inside src/cs420x-a1534>
+#
+# "derived" is not a kernel tag. It marks a file that has no kernel version
+# because it is produced offline from something tracked here: the A1534
+# bring-up sequence, which is never downloaded.
+#
+# packaging/fetch-upstream.sh refuses to build against a (tag, path) pair it
+# does not find here, and fails hard - with no override - if a pair it does
+# find has different bytes. A new kernel series is added by running the
+# fetcher with --accept-new and committing the result, so that new hashes are
+# reviewed like any other change.
+#
+# vendored/ORIGINAL-a1534_sequence.h is deliberately absent: it is tracked in
+# Git, so Git is its integrity record. Its hash is still stated for the
+# packaged copy, in vendored/PROVENANCE.sha256.
+#
+# v7.2.6 seeded 2026-09-21. The six fetched files are byte-identical to what
+# an earlier release carried in the repository as "v7.2.4"; the two derived
+# files were byte-identical to what that release shipped and what was tested
+# on hardware.
+#
+# v6.18.55 seeded 2026-10-20 for the CachyOS LTS kernel (6.18.55-2-cachyos-lts).
+# One tag per kernel series; the series are independent. local-changes.patch
+# applies to the v6.18.55 cs420x.c at fuzz 0. It was built, but not yet run on
+# hardware, when seeded; it ran on hardware later on 2026-10-20 (20261020.03).
+#
+# 2026-10-20: the pins of both derived cs420x.c rows changed because one comment in
+# local-changes.patch was reworded (same line count, no code change: the files
+# are identical once comments are stripped). 2026-10-21: changed again, for the
+# same reason, by two comments of local-changes.patch.
+
+v7.2.6     6f0d3e1bd1117d3443ffbc8de31cd92c3295f0cff0a035f1691f74f937bb51be  upstream/cs420x.c
+v7.2.6     21b31260451c5fd4868f030cad31b86012acd3e5091caaa39a902d648073d2a9  kheaders/hda_local.h
+v7.2.6     59c9e34e50f22e36ddc45dc22ca822838104e745884e6841bee73e65876a0716  kheaders/hda_auto_parser.h
+v7.2.6     b6af84afebab898958e2a972acab3783ed1849c826961f8333f01bd127572b49  kheaders/hda_jack.h
+v7.2.6     9e943b14f5ab34c3d96474adb9f7ad289e8e413616af4c1ff69c93ad7f7cf4cf  kheaders/hda_beep.h
+v7.2.6     9175959750d86f715d15eb2e4c063a95861ed7d737418e9f55843b1af04446d6  kheaders/generic.h
+v7.2.6     b63781006454547e4dcb245e28d9b28a3e63d67ea713be77c11a87e266e56b45  cs420x.c
+derived    1bc934e6bf51208c40cd813211935f80703885a66ed1b29ef012adf013149496  vendored/a1534_sequence.h
+v6.18.55   f686dea51b064bb341a06938afbe4607170c8bf5ad2431c7be8eb23edc991f69  upstream/cs420x.c
+v6.18.55   47f352d10beacc76f10ae3776e148674803982350f5058415afc65bd4288940a  kheaders/hda_local.h
+v6.18.55   59c9e34e50f22e36ddc45dc22ca822838104e745884e6841bee73e65876a0716  kheaders/hda_auto_parser.h
+v6.18.55   668b76a1651bf8e363bde6f2f808d183e68d4f21f7188a229f43abf8a2dcb75e  kheaders/hda_jack.h
+v6.18.55   9e943b14f5ab34c3d96474adb9f7ad289e8e413616af4c1ff69c93ad7f7cf4cf  kheaders/hda_beep.h
+v6.18.55   9175959750d86f715d15eb2e4c063a95861ed7d737418e9f55843b1af04446d6  kheaders/generic.h
+v6.18.55   41a224aa7145dddab31af102b3a98ea5a92a3d75910f6c3eba19fd7afac4ec71  cs420x.c

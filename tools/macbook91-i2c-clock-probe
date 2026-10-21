@@ -1,0 +1,107 @@
+#!/usr/bin/env python3
+# SPDX-License-Identifier: GPL-3.0-or-later
+"""SUPERSEDED - use macbook91-runner probe. Kept as evidence of what was run;
+nothing new should be added here.
+
+Does the CS4208 I2C master answer when the TDM clock is running?
+
+Needs root (CAP_SYS_RAWIO for the HDA verb ioctl).
+
+Motivation: AppleHDA's order is setupTDMBuses -> setupTDMPath -> amp enable.
+The amplifier I2C only ever runs with the TDM path already configured, and the
+amplifiers are clocked from the codec (layouts 121/127/129: SRMultiple = 64).
+If the bus clock is derived from the TDM/audio clock, the engine cannot
+transfer anything while no stream is running - which is every moment we have
+probed so far.
+
+Run this TWICE: once with the speakers working (right after a boot) and once
+after a suspend. The first run is the control that has been missing.
+
+Safety: it plays DIGITAL SILENCE (zeros) to the speaker PCM, so nothing is
+audible and nothing is driven hard. Every amplifier access is a read. It
+writes no amplifier register and restores the bridge state on exit.
+"""
+import fcntl, struct, subprocess, sys, time
+
+HWDEP = '/dev/snd/hwC0D0'
+IOCTL = 0xC0084811
+VN = 0x24
+SET_COEF_INDEX, GET_PROC_COEF, SET_PROC_COEF = 0x500, 0x0c00, 0x400
+C_EN, C_ADDR, C_DATA, C_CTRL, C_STAT = 0x00, 0x14, 0x15, 0x16, 0x17
+START, STOP, ENB = 0x04, 0x02, 0x08
+
+fd = open(HWDEP, 'rb+', buffering=0)
+
+def verb(nid, v, p):
+    out = fcntl.ioctl(fd, IOCTL, struct.pack('II', ((nid&0xff)<<24)|((v&0xffff)<<8)|(p&0xff), 0))
+    return struct.unpack('II', out)[1]
+
+def cget(i):
+    verb(VN, SET_COEF_INDEX, i); return verb(VN, GET_PROC_COEF, 0) & 0xffff
+
+def cset(i, v):
+    verb(VN, SET_COEF_INDEX, i); verb(VN, SET_PROC_COEF | ((v>>8)&0xff), v & 0xff)
+
+def bridge(on):
+    v = cget(C_EN)
+    cset(C_EN, v ^ ENB)
+    if on:
+        cset(C_EN, (v ^ ENB) | ENB)
+    return cget(C_EN)
+
+def amp_read(addr_byte, reg):
+    cset(C_ADDR, addr_byte)
+    cset(C_CTRL, START); cget(C_STAT); time.sleep(0.002)
+    cset(C_DATA, reg)
+    cget(C_STAT); time.sleep(0.002)
+    cset(C_ADDR, addr_byte | 1)
+    cset(C_CTRL, START); cget(C_STAT); time.sleep(0.002)
+    data = cget(C_DATA)
+    stat = cget(C_STAT)
+    cset(C_CTRL, STOP); cget(C_STAT)
+    return data, stat
+
+def sweep(tag):
+    for addr in (0x6c, 0x20):
+        shifted = amp_read(addr << 1, 0x01)
+        raw     = amp_read(addr,      0x01)
+        what = "amp " if addr == 0x6c else "ctrl"
+        print(f"    {tag} {what} 0x{addr:02x}: addr<<1 -> data={shifted[0]:04x} stat={shifted[1]:04x}"
+              f"   |  raw addr -> data={raw[0]:04x} stat={raw[1]:04x}")
+
+pin1d = verb(0x1d, 0xf1c, 0)
+print(f"pin 0x1d      : 0x{pin1d:08x}  ({'INTACT - speakers should work' if pin1d==0x90100110 else 'LOST - post-suspend'})")
+print(f"GPIO data     : 0x{verb(0x01,0xf15,0):02x}")
+print(f"coef 0x00     : 0x{cget(C_EN):04x}")
+print()
+
+print("PHASE 1: no stream running")
+print(f"  bridge enable coef 0x00 -> 0x{bridge(True):04x}")
+sweep("no-stream")
+bridge(False)
+print()
+
+print("PHASE 2: digital silence streaming to the speaker PCM (inaudible)")
+ap = subprocess.Popen(
+    ["aplay", "-D", "hw:0,0", "-f", "S16_LE", "-r", "44100", "-c", "4", "-t", "raw", "/dev/zero"],
+    stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+try:
+    time.sleep(1.5)
+    running = ap.poll() is None
+    print(f"  aplay running: {running}")
+    if not running:
+        print("  (the PCM would not open - PipeWire may hold it; stop it or ignore phase 2)")
+    conv = verb(0x0a, 0xf06, 0)
+    print(f"  converter 0x0a stream/channel: 0x{conv:02x}   (non-zero = a stream is assigned)")
+    print(f"  bridge enable coef 0x00 -> 0x{bridge(True):04x}")
+    sweep("streaming")
+    bridge(False)
+finally:
+    ap.terminate()
+    try: ap.wait(timeout=3)
+    except Exception: ap.kill()
+
+print()
+print("Reading: if 'ctrl 0x20' ever differs from 'amp 0x6c', the bus is")
+print("answering and a real device is present. If they stay identical, nothing")
+print("on this bus replies and the amplifiers are not reached this way.")

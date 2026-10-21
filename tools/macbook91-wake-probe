@@ -1,0 +1,371 @@
+#!/usr/bin/env python3
+# SPDX-License-Identifier: GPL-3.0-or-later
+"""Who wakes this machine four seconds after it suspends?
+
+Snapshots every counter the kernel exposes about wake sources, suspends, waits
+for the resume, snapshots again, and reports what moved. Needs no root for the
+measurement itself.
+
+The counters it reads:
+
+  /sys/firmware/acpi/interrupts/*        per-GPE interrupt counts. A GPE that
+                                         ticks exactly once per suspend is the
+                                         wake signal.
+  /sys/devices/**/power/wakeup_*         per-device wakeup, abort and activation
+                                         counts - the world-readable half of
+                                         /sys/kernel/debug/wakeup_sources.
+  /proc/acpi/wakeup                      which devices are armed for S3 at all.
+  /sys/power/pm_wakeup_irq               the IRQ credited with the last wake,
+                                         when the wake came through one.
+  /sys/power/suspend_stats/*             whether the suspend actually succeeded.
+  /usr/lib/systemd/system-sleep/*        the hooks systemd ACTUALLY runs, and
+                                         whether any of them rewrites
+                                         /proc/acpi/wakeup behind the
+                                         measurement's back.
+  /etc/systemd/system-sleep/*            recorded too, and flagged: systemd
+                                         does NOT read this directory. Scripts
+                                         left here never run.
+
+Resume is detected by the gap between CLOCK_BOOTTIME and CLOCK_MONOTONIC:
+BOOTTIME counts the time spent suspended and MONOTONIC does not, so the
+difference jumps by exactly the time spent in S3. That needs no log parsing and
+cannot be fooled by a screen blanking without a suspend.
+
+    macbook91-wake-probe snapshot FILE.json
+    macbook91-wake-probe diff BEFORE.json AFTER.json
+    macbook91-wake-probe cycle OUTDIR          snapshot, suspend, resume, diff
+    macbook91-wake-probe prw [DSDT]           map GPE numbers to wake devices
+"""
+
+import json
+import os
+import subprocess
+import sys
+import time
+
+ACPI_IRQ = '/sys/firmware/acpi/interrupts'
+
+
+def clocks():
+    return {'monotonic': time.clock_gettime(time.CLOCK_MONOTONIC),
+            'boottime': time.clock_gettime(time.CLOCK_BOOTTIME)}
+
+
+def read(path):
+    try:
+        with open(path) as f:
+            return f.read().strip()
+    except OSError as e:
+        return '<%s>' % e.errno
+
+
+def snapshot():
+    s = {'utc': time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime()),
+         'clocks': clocks(), 'gpe': {}, 'devices': {}, 'power': {}}
+
+    if os.path.isdir(ACPI_IRQ):
+        for name in sorted(os.listdir(ACPI_IRQ)):
+            v = read(os.path.join(ACPI_IRQ, name))
+            s['gpe'][name] = v.split()[0] if v and not v.startswith('<') else v
+
+    for root, dirs, files in os.walk('/sys/devices'):
+        if not root.endswith('/power'):
+            continue
+        dirs[:] = []
+        if 'wakeup' not in files:
+            continue
+        dev = os.path.basename(os.path.dirname(root))
+        entry = {}
+        for f in files:
+            if f.startswith('wakeup'):
+                entry[f] = read(os.path.join(root, f))
+        # keep only sources that are armed or have ever fired
+        interesting = entry.get('wakeup') == 'enabled' or any(
+            entry.get(k) not in (None, '0', '') for k in
+            ('wakeup_count', 'wakeup_active_count', 'wakeup_abort_count'))
+        if interesting:
+            s['devices'][dev] = entry
+
+    # Sleep hooks. This is here because missing them cost a whole round of
+    # measurement: a hook that rewrites /proc/acpi/wakeup in its `pre` stage
+    # changes the armed set between the "before" snapshot and the actual
+    # suspend, so the snapshot describes a state the machine was never in.
+    #
+    # systemd runs ONLY /usr/lib/systemd/system-sleep/. That is what the
+    # binary contains and what systemd-sleep(8) documents. /etc/systemd/
+    # system-sleep/ is a widely repeated mistake; scripts dropped there never
+    # execute. Both are recorded, and the ineffective one is labelled.
+    s['sleep_hooks'] = {}
+    for d, effective in (('/usr/lib/systemd/system-sleep', True),
+                         ('/etc/systemd/system-sleep', False),
+                         ('/run/systemd/system-sleep', False)):
+        entries = {}
+        try:
+            names = sorted(os.listdir(d))
+        except OSError:
+            continue
+        for n in names:
+            full = os.path.join(d, n)
+            info = {'executable': os.access(full, os.X_OK)}
+            try:
+                with open(full, 'rb') as f:
+                    body = f.read(65536)
+                info['touches_acpi_wakeup'] = b'/proc/acpi/wakeup' in body
+            except OSError:
+                info['touches_acpi_wakeup'] = None
+            entries[n] = info
+        s['sleep_hooks'][d] = {'systemd_runs_this': effective, 'entries': entries}
+
+    s['power']['acpi_wakeup'] = read('/proc/acpi/wakeup')
+    s['power']['wakeup_count'] = read('/sys/power/wakeup_count')
+    s['power']['pm_wakeup_irq'] = read('/sys/power/pm_wakeup_irq')
+    s['power']['mem_sleep'] = read('/sys/power/mem_sleep')
+    s['power']['rtc_wakealarm'] = read('/sys/class/rtc/rtc0/wakealarm')
+    st = '/sys/power/suspend_stats'
+    if os.path.isdir(st):
+        s['power']['suspend_stats'] = {f: read(os.path.join(st, f))
+                                       for f in sorted(os.listdir(st))}
+    return s
+
+
+def diff(a, b):
+    out = []
+    slept = ((b['clocks']['boottime'] - a['clocks']['boottime'])
+             - (b['clocks']['monotonic'] - a['clocks']['monotonic']))
+    out.append(('', 'time spent suspended',
+                '%.1f s' % slept if slept > 0.5 else
+                'NONE - the machine never actually suspended'))
+
+    for k in sorted(set(a['gpe']) | set(b['gpe'])):
+        va, vb = a['gpe'].get(k), b['gpe'].get(k)
+        if va == vb:
+            continue
+        try:
+            d = int(vb) - int(va)
+        except (TypeError, ValueError):
+            d = '?'
+        out.append(('gpe', k, '%s -> %s  (+%s)' % (va, vb, d)))
+
+    for dev in sorted(set(a['devices']) | set(b['devices'])):
+        da, db = a['devices'].get(dev, {}), b['devices'].get(dev, {})
+        for k in sorted(set(da) | set(db)):
+            if k in ('wakeup_last_time_ms', 'wakeup_total_time_ms',
+                     'wakeup_max_time_ms', 'wakeup_active'):
+                continue
+            if da.get(k) != db.get(k):
+                out.append(('device ' + dev, k,
+                            '%s -> %s' % (da.get(k), db.get(k))))
+
+    for k in sorted(set(a['power']) | set(b['power'])):
+        if k in ('suspend_stats', 'acpi_wakeup'):
+            continue
+        if a['power'].get(k) != b['power'].get(k):
+            out.append(('power', k, '%s -> %s'
+                        % (a['power'].get(k), b['power'].get(k))))
+    sa = a['power'].get('suspend_stats', {})
+    sb = b['power'].get('suspend_stats', {})
+    for k in sorted(set(sa) | set(sb)):
+        if sa.get(k) != sb.get(k):
+            out.append(('suspend_stats', k, '%s -> %s' % (sa.get(k), sb.get(k))))
+    return out, slept
+
+
+def hook_warnings(s):
+    """Anything in the sleep-hook directories that this measurement must not
+    be read without."""
+    out = []
+    for d, info in sorted(s.get('sleep_hooks', {}).items()):
+        for name, e in sorted(info['entries'].items()):
+            if not e.get('executable'):
+                continue
+            if info['systemd_runs_this']:
+                if e.get('touches_acpi_wakeup'):
+                    out.append('%s/%s rewrites /proc/acpi/wakeup and systemd '
+                               'DOES run it - the armed set during the suspend '
+                               'is not the one listed above' % (d, name))
+            else:
+                out.append('%s/%s is executable but systemd does NOT read %s - '
+                           'it never runs' % (d, name, d))
+    return out
+
+
+def report(d, slept):
+    print('%-22s %-24s %s' % ('WHERE', 'WHAT', 'CHANGE'))
+    for where, what, change in d:
+        print('%-22s %-24s %s' % (where, what, change))
+    print()
+    gpes = [(w, c) for src, w, c in d if src == 'gpe'
+            and not w.startswith(('gpe_all', 'sci', 'error', 'ff_'))]
+    if slept <= 0.5:
+        print('VERDICT: no suspend happened at all.')
+    elif slept < 60:
+        print('VERDICT: the machine came back after %.0f s. Something woke it.'
+              % slept)
+        if gpes:
+            print('         GPEs that fired across the suspend: %s'
+                  % ', '.join('%s %s' % g for g in gpes))
+            print('         A GPE that ticks exactly once per suspend is the')
+            print('         wake signal. Map it to a device by disabling')
+            print('         candidates in /proc/acpi/wakeup one at a time.')
+        else:
+            print('         No GPE moved. Look at pm_wakeup_irq and the')
+            print('         per-device wakeup_count entries above.')
+    else:
+        print('VERDICT: stayed suspended for %.0f s. Nothing woke it early.' % slept)
+
+
+def wait_for_resume(before, timeout=900):
+    """Resume is a jump in BOOTTIME that MONOTONIC does not follow."""
+    base = before['clocks']['boottime'] - before['clocks']['monotonic']
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        time.sleep(1)
+        now = clocks()
+        if (now['boottime'] - now['monotonic']) - base > 0.5:
+            return True
+    return False
+
+
+# ---------------------------------------------------------------- _PRW map
+#
+# Which GPE belongs to which device is declared in the DSDT as a _PRW package:
+#
+#     Name (_PRW, Package (0x02) { 0x6F, 0x03 })
+#            ^^^^                   ^^^^  ^^^^
+#            name                   GPE   deepest sleep state
+#
+# In AML that is NameOp 0x08, the four bytes "_PRW", PackageOp 0x12, a
+# PkgLength, an element count, and then the first element. Reading it needs no
+# disassembler, only the encoding - which matters, because iasl is not
+# installed here and the DSDT is root-only.
+#
+# The device that owns each _PRW is its enclosing Device scope, which this does
+# NOT parse. Instead it relies on order: /proc/acpi/wakeup lists devices in the
+# order ACPI enumerated them, which is DSDT order, and _PRW objects appear in
+# that same order. That is a heuristic. It is only trusted when the two lists
+# have the same length, and it is labelled as a heuristic in the output.
+
+def _pkglength(buf, i):
+    """Returns (length, bytes_consumed) for an AML PkgLength at buf[i]."""
+    lead = buf[i]
+    n = lead >> 6
+    if n == 0:
+        return lead & 0x3F, 1
+    val = lead & 0x0F
+    for k in range(n):
+        val |= buf[i + 1 + k] << (4 + 8 * k)
+    return val, n + 1
+
+
+def parse_prw(aml):
+    """Every _PRW in the table, as (file offset, gpe number or None)."""
+    out = []
+    needle = b'\x08_PRW\x12'
+    i = aml.find(needle)
+    while i >= 0:
+        j = i + len(needle)
+        try:
+            _, used = _pkglength(aml, j)
+            j += used
+            j += 1                      # element count
+            op = aml[j]
+            if op == 0x0A:              # BytePrefix
+                gpe = aml[j + 1]
+            elif op == 0x00:            # ZeroOp
+                gpe = 0
+            elif op == 0x01:            # OneOp
+                gpe = 1
+            elif op == 0x0B:            # WordPrefix
+                gpe = aml[j + 1] | (aml[j + 2] << 8)
+            elif op == 0x12:            # Package: {GPE block device, index}
+                gpe = None
+            else:
+                gpe = None
+        except IndexError:
+            gpe = None
+        out.append((i, gpe))
+        i = aml.find(needle, i + 1)
+    return out
+
+
+def cmd_prw(dsdt_path):
+    try:
+        aml = open(dsdt_path, 'rb').read()
+    except PermissionError:
+        print('BLOCKED: %s needs root' % dsdt_path, file=sys.stderr)
+        return 2
+    prw = parse_prw(aml)
+    rows = [l.split() for l in read('/proc/acpi/wakeup').splitlines()[1:] if l.strip()]
+    print('%d _PRW objects in %s, %d devices in /proc/acpi/wakeup'
+          % (len(prw), dsdt_path, len(rows)))
+    if len(prw) != len(rows):
+        print('counts differ - the positional match below is NOT reliable')
+    print()
+    print('%-8s %-6s %-10s %-8s %s' % ('DEVICE', 'S', 'STATUS', 'GPE', 'note'))
+    for k, row in enumerate(rows):
+        gpe = prw[k][1] if k < len(prw) else None
+        name = row[0]
+        state = row[1] if len(row) > 1 else '?'
+        status = row[2] if len(row) > 2 else '?'
+        print('%-8s %-6s %-10s %-8s %s'
+              % (name, state, status,
+                 ('0x%02X' % gpe) if gpe is not None else '-',
+                 'heuristic: %d-th _PRW in DSDT order' % k))
+    return 0
+
+
+def main():
+    if len(sys.argv) >= 3 and sys.argv[1] == 'snapshot':
+        json.dump(snapshot(), open(sys.argv[2], 'w'), indent=1, sort_keys=True)
+        print('snapshot -> %s' % sys.argv[2])
+        return 0
+
+    if len(sys.argv) >= 4 and sys.argv[1] == 'diff':
+        a = json.load(open(sys.argv[2]))
+        b = json.load(open(sys.argv[3]))
+        d, slept = diff(a, b)
+        report(d, slept)
+        for w in hook_warnings(a):
+            print('NOTE: %s' % w)
+        return 0
+
+    if sys.argv[1:2] == ['prw']:
+        return cmd_prw(sys.argv[2] if len(sys.argv) > 2
+                       else '/sys/firmware/acpi/tables/DSDT')
+
+    if len(sys.argv) >= 3 and sys.argv[1] == 'cycle':
+        out = sys.argv[2]
+        os.makedirs(out, exist_ok=True)
+        before = snapshot()
+        json.dump(before, open(os.path.join(out, 'wake-before.json'), 'w'),
+                  indent=1, sort_keys=True)
+        for w in hook_warnings(before):
+            print('NOTE: %s' % w)
+        print()
+        print('armed wake sources:')
+        for line in before['power']['acpi_wakeup'].splitlines()[1:]:
+            if '*enabled' in line:
+                print('   ' + line)
+        print('\nsuspending now. Wake the machine yourself if it does not come')
+        print('back on its own; this waits up to 15 minutes either way.\n')
+        sys.stdout.flush()
+        subprocess.run(['systemctl', 'suspend'], check=False)
+        if not wait_for_resume(before):
+            print('no resume detected within the timeout', file=sys.stderr)
+            return 2
+        time.sleep(3)          # let the resume settle before reading counters
+        after = snapshot()
+        json.dump(after, open(os.path.join(out, 'wake-after.json'), 'w'),
+                  indent=1, sort_keys=True)
+        d, slept = diff(before, after)
+        report(d, slept)
+        for w in hook_warnings(after):
+            print('NOTE: %s' % w)
+        return 0
+
+    print(__doc__)
+    return 3
+
+
+if __name__ == '__main__':
+    sys.exit(main())

@@ -1,0 +1,18 @@
+--- ORIGINAL-a1534_sequence.h	2026-09-14 07:15:44.832870752 +0200
++++ a1534_sequence.h	2026-09-14 07:15:54.042395322 +0200
+@@ -68,7 +68,7 @@
+         // lets return the read value for checking
+         return retval;
+ }
+-void snd_hda_coef_item(struct hda_codec *codec, u16 write_flag, hda_nid_t nid, u32 idx, u32 param, u32 retdata, int srcidx)
++static void snd_hda_coef_item(struct hda_codec *codec, u16 write_flag, hda_nid_t nid, u32 idx, u32 param, u32 retdata, int srcidx)
+ {
+         if (write_flag == 2)
+         {
+@@ -1675,4 +1675,5 @@
+ 	return 0;
+ }
+ 
+-#include "patch_cirrus_a1534_pcm.h"
++/* leifliddy chained its PCM layer here; this project supplies its own
++ * (../a1534_pcm.h), which cs420x.c includes right after this file. */

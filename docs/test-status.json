@@ -1,0 +1,725 @@
+{
+  "schema": 1,
+  "updated": "2026-10-21",
+  "kernel": "7.2.11-1-cachyos; 6.18.55-2-cachyos-lts (6.18 gate of 20261020.03)",
+  "baseline": "20260914T050602Z (a local capture, not part of this repository)",
+  "source_hash": "20261021.01",
+  "legend": {
+    "NOT_RUN": "never attempted",
+    "PASS": "executed and passed",
+    "FAIL": "executed and failed",
+    "BLOCKED": "cannot run until a gate is cleared",
+    "SKIPPED": "deliberately out of scope, with reason"
+  },
+  "gates": [
+    {
+      "id": "evidence.archive_integrity",
+      "status": "PASS",
+      "note": "188/188 reference files + input.tar.xz match recorded SHA256"
+    },
+    {
+      "id": "evidence.baseline_collected",
+      "status": "PASS",
+      "note": "41 files, fully unprivileged, no unreadable item"
+    },
+    {
+      "id": "rootcause.identified",
+      "status": "PASS",
+      "note": "no PCM on converter 0x0a; see docs/ROOT-CAUSE.md"
+    },
+    {
+      "id": "rootcause.p0_hypothesis",
+      "status": "FAIL",
+      "note": "historical PCI-vs-codec-subsystem story refuted; real mechanism documented"
+    },
+    {
+      "id": "evidence.applehda_decoded",
+      "status": "PASS",
+      "note": "layouts 121/127/129 decoded; topology found, NO amp init present"
+    },
+    {
+      "id": "evidence.bootcamp_decoded",
+      "status": "SKIPPED",
+      "note": "cs420x_46.inf covers DEV_4206/4207 only; no DEV_4208, no 106B6500 - wrong codec, excluded as evidence"
+    },
+    {
+      "id": "evidence.a1534_values_traced",
+      "status": "PASS",
+      "note": "Stream contract derived: speakers conv 0x0a fmt 0x4013 (44.1k/16/4ch), headphones conv 0x02 fmt 0x4011 (44.1k/16/2ch), pin 0x1d SET_CONNECT_SEL 0 + PIN_WIDGET 0x40. The amplifier register programming itself remains underivable (HARDWARE-PATH.md \u00a75)."
+    },
+    {
+      "id": "audit.bundled_driver",
+      "status": "FAIL",
+      "note": "16 findings. Worst: F1 ungated, F2 driver-global ops mutation, F11 unlocked module-global stream state, F13 copied private kernel struct (DKMS-hostile), F16 PCM bound to converter 0x04 which the driver powers off - audio works only by stream-tag collision on 0x0a."
+    },
+    {
+      "id": "regress.quirk_match_a1534",
+      "status": "PASS",
+      "note": "tests/test_a1534_match.c, 17 checks incl. the mandated case"
+    },
+    {
+      "id": "regress.no_mainline_drift",
+      "status": "PASS",
+      "note": "local-changes.patch is 51+/2- lines, all gated; F3-F5 not carried"
+    },
+    {
+      "id": "regress.compiler_family_gate",
+      "status": "PASS",
+      "note": "Makefile selects family from target .config; GCC build reproducibly fails on clang-only flags"
+    },
+    {
+      "id": "regress.header_identity_gate",
+      "status": "PASS",
+      "note": "make check requires .config, Module.symvers, utsrelease.h and UPSTREAM.sha256"
+    },
+    {
+      "id": "regress.pcm_caps_before_probe",
+      "status": "PASS",
+      "note": "verifier queries PCM channel capability before any playback; run-tests checks channels_max=4 not 8"
+    },
+    {
+      "id": "regress.jack_hotplug_stream",
+      "status": "PASS",
+      "note": "PLUG HALF RE-MEASURED 2026-10-19 under 20261015.01 (docs/INCIDENT-20261019.md): with a silent four-channel playback on hw:0,0, a real plug and unplug (the jack read 'off' before the plug) left the playback running, and the Headphone Jack control followed the socket both ways; an unprivileged reproduction, not a runner run. The runner runs of 2026-09-15 (20260915T200338Z-3039) and 2026-10-06 (20261006T081744Z-3324) measured the unplug only: the headphones were already in when the runner asked for the plug. The runner now waits for the opposite jack state before each prompt."
+    },
+    {
+      "id": "regress.concurrent_capture",
+      "status": "PASS",
+      "note": "PASS ON HARDWARE 2026-10-20 under 20261020.01 (loaded module 20261020.01+79b16c8b296a3821) on kernel 7.2.11-1-cachyos: macbook91-runner jackstream, run 20261020T063948Z-5274, verdict PASS. Capture grew across the plug and the unplug, a restarted capture grew after each transition, playback stayed alive, AFG/ADC read D0-idle afterwards. Supersedes the FAIL of 2026-10-19 under 20261015.01 (docs/INCIDENT-20261019.md)."
+    },
+    {
+      "id": "pkg.install_20261020_02",
+      "status": "PASS",
+      "note": "INSTALLED on the test machine 2026-10-20 13:50-13:51 (run by Claude after the maintainer's authorization): sudo pacman -U of all five packages exited 0. dkms status: macbook91-cs4208/20261020.02 installed for 7.2.11-1-cachyos; its build for 6.18.55-2-cachyos-lts was refused by the module's own kernel-series guard (make check: series mismatch), exactly as for 20261015.01 and 20261020.01 (pacman.log), so not a regression. macbook91-facetimehd/20261020.01 installed for 7.2.11-1-cachyos and 6.18.55-2-cachyos-lts; macbook91-wireless/20261020.01 for 7.2.11-1-cachyos (LTS skipped by design); macbook91-backlight/20261020.01 and macbook91-applesmc/20261020.01 for both kernels. On-disk module versions for 7.2.11-1-cachyos: snd-hda-codec-cs420x 20261020.02+79b16c8b296a3821, macbook91_facetimehd 20261020.01+949038441c655353, brcmfmac and brcmfmac-wcc 20261020.01+494451d9a8ce5f25, hci_uart 2.3+20261020.01+494451d9a8ce5f25, macbook91_backlight 20261020.01. pacman -Qkk macbook91-facetimehd-firmware: 13 files, 0 altered. The new modules were NOT loaded (no reload, no reboot yet): the loaded module is still 20261020.01+79b16c8b296a3821."
+    },
+    {
+      "id": "hw.runtime_20261020_02_carried_over",
+      "status": "NOT_RUN",
+      "note": "NOT RUN for 20261020.02; CARRIED OVER from the previously released packages, whose module sources are identical (cs4208 source identity 79b16c8b296a3821, facetimehd source ID 949038441c655353) or differ only in comments/SPDX lines (hw-fixes C file: two comment lines; wireless: comment lines in Makefile/Kbuild/dkms.conf, patches and kernel sources unchanged). After the boot of 2026-10-20 13:28 the maintainer ran the verify tools on those packages: macbook91-audio-verify on 20261020.01+79b16c8b296a3821: 31 passed, 0 failed, 2 skipped (HDMI not connected; jack-profile check only with headphones), including speaker tone, microphone, headphone hotplug plug/unplug and capture across hotplug, all confirmed by the maintainer; macbook91-facetimehd-verify on 20261019.01+949038441c655353 with firmware 20261013.01: PASS (0 warnings), 60 frames captured, camera powered off after idle, firmware hashes match; macbook91-hw-verify on hw-fixes 20261015.01: pass=26 warn=0 fail=0; macbook91-wireless-verify on 20261015.01+111f0cf7cb003721: 0 FAIL, 0 WARN including 'Wi-Fi P2P off (modprobe.d)'. Earlier the same day the repo version of macbook91-wireless-verify (with the rewritten P2P check of 20261020.01) also ran read-only on this system: PASS, 0 FAIL, 0 WARN. No fresh runtime PASS is claimed for 20261020.02: the 20261020.02 modules were installed but not loaded, no reboot after the install."
+    },
+    {
+      "id": "build.lts_6_18",
+      "status": "PASS",
+      "note": "BUILD ONLY, measured 2026-10-20 for 20261020.03 (not a hardware result): the module builds against the installed 6.18.55-2-cachyos-lts headers (gcc-built kernel) with no warnings; W=1 shows only the three known -Wunused-but-set-variable warnings in vendored/a1534_sequence.h; modinfo reports version test+7fc96add428d9fce, vermagic 6.18.55-2-cachyos-lts SMP preempt mod_unload. The 7.2.11-1-cachyos build (clang-built) is unchanged: source identity 79b16c8b296a3821. A kernel series the package does not ship (fake 9.9) is refused by make check. This gate is the build-only measurement made before the hardware run; the hardware result is hw.runtime_6_18_lts and the DKMS install on 6.18 is pkg.install_20261020_03."
+    },
+    {
+      "id": "hw.runtime_6_18_lts",
+      "status": "PASS",
+      "note": "PASS ON HARDWARE 2026-10-20 under 20261020.03 on kernel 6.18.55-2-cachyos-lts (maintainer-run boot at about 18:25): macbook91-audio-verify 31 passed, 0 failed, 2 skipped (the jack-profile check needs headphones plugged in; HDMI not connected). The loaded module 20261020.03+7fc96add428d9fce equals the on-disk module; the A1534 fixup was detected (codec SSID 106b:6500), the bring-up ran without failure and deep suspend was selected (configuration only, no suspend happened). Maintainer-confirmed: speaker tone, microphone (peak 0.193085, own voice), headphone jack detect, capture surviving the plug (hw_ptr 238176 -> 286632) and the unplug (287864 -> 336304), headphone tone, speakers after the unplug. The run used the package built before the documentation-only re-pin of the release (package sha256 3fc2fe99...); the module source identity 7fc96add428d9fce is the same. Companion read-only checks in the same boot: macbook91-wireless-verify 0 FAIL, 0 WARN (Bluetooth hci0 present but rfkill-blocked by a user setting, so not exercised); macbook91-facetimehd-verify PASS, 0 warnings; macbook91-hw-verify pass=26 warn=0 fail=0. NOT VERIFIED on 6.18 (accepted by the maintainer on 2026-10-20 without a test run: suspend/resume, see hw.suspend_resume_6_18_lts; Bluetooth function and the wireless hang recovery by rebind in action, tracked in the wireless package; a headset call, see hw.headset_call). HDMI stays SKIPPED by the maintainer's decision. Evidence: the maintainer's gate report of 2026-10-20, kept outside the repository."
+    },
+    {
+      "id": "pkg.install_20261020_03",
+      "status": "PASS",
+      "note": "INSTALLED on the test machine 2026-10-20 (maintainer-run): pacman -U of macbook91-cs4208-dkms 20261020.03-1 (package sha256 3fc2fe994ca304a82ad80f1e882790065bca458a0dedf727594a69dcb8bf6764, built before the documentation-only re-pin of the release) together with macbook91-wireless-dkms 20261020.02-1 exited 0 at 18:20. DKMS installed macbook91-cs4208 20261020.03 and macbook91-wireless 20261020.02 for both 6.18.55-2-cachyos-lts and 7.2.11-1-cachyos, and rebuilt the initramfs for both. Not run: a DKMS rebuild on a 6.18 kernel update, and the package removal under 6.18. Superseded as the installed build by pkg.install_published_20261020_03."
+    },
+    {
+      "id": "pkg.install_published_20261020_03",
+      "status": "PASS",
+      "note": "INSTALLED 2026-10-20 19:01-19:04 (maintainer-run, on 6.18.55-2-cachyos-lts): sudo pacman -U of the four published packages exited 0. macbook91-cs4208-dkms 20261020.03-1 (package sha256 96a585623455500d62b0624bcfaa9a8c33b19c5e52e13706a22dcea4a7c9ad5b) was reinstalled over the pre-re-pin build (3fc2fe99...), macbook91-wireless-dkms 20261020.02-1 (sha256 d1f7176f677ad4cd3b330b29b3ab2a7116d71e3a73e56452c51fa79d75ae25e8, over 5f640807...), macbook91-facetimehd-dkms 20261020.02-1 (sha256 f5c67b96e8ec77b6714fb495d5275ebca92cbaaf81b899706f1b53abe501fa54, upgraded from 20261020.01-1) and macbook91-hw-fixes 20261020.02-1 (sha256 fe6b9d249a396335bd41cc21f600e91b80b44b9db13c53a99dd81082327a5c37, upgraded from 20261020.01-1). The installed packages are byte-identical to the GitHub release assets. DKMS installed all five modules (cs4208 20261020.03, wireless 20261020.02, facetimehd 20261020.02, backlight 20261020.02, applesmc 20261020.02) for 6.18.55-2-cachyos-lts and 7.2.11-1-cachyos and rebuilt the initramfs for both; pacman -Qkk reports 0 altered files in all four packages. On 6.18 the loaded snd_hda_codec_cs420x 20261020.03+7fc96add428d9fce, brcmfmac/brcmfmac_wcc and hci_uart 20261020.02+2eed8ec6343efe4f equal the on-disk modules; macbook91_facetimehd (loaded 20261020.01+949038441c655353, on disk 20261020.02+949038441c655353) and macbook91_backlight (loaded 20261020.01, on disk 20261020.02) are still the previous builds with the same source and load at the next boot or module reload, with no runtime check of them yet (NOT VERIFIED, carried over); applesmc srcversion 5A3B81D97F1C91FE86F89E1 loaded equals on disk. NOT VERIFIED on 6.18, accepted by the maintainer on 2026-10-20 without a test run: suspend/resume in all packages (hw.suspend_resume_6_18_lts), Bluetooth function, the wireless rebind recovery in action, a headset call (hw.headset_call)."
+    },
+    {
+      "id": "hw.suspend_resume_6_18_lts",
+      "status": "NOT_RUN",
+      "note": "NOT RUN on 6.18.55-2-cachyos-lts for 20261020.03: no suspend happened in the gate boot (suspend_stats success=0 fail=0 in macbook91-hw-verify), so suspend/resume of the cs4208 module and of every other driver is NOT VERIFIED on 6.18 (accepted by the maintainer). The GPIO verbs use snd_hda_codec_write on 6.18 and assume AFG nid 0x01. Accepted by the maintainer on 2026-10-20 without a test run (not tested; see the accepted field). If it is ever run: one deep suspend under the 6.18 kernel with sound surviving the resume, then macbook91-audio-verify again. The 7.2 suspend results (hw.deep_suspend_resume and hw.long_suspend_coverage) do not transfer to 6.18 by themselves.",
+      "accepted": "2026-10-20: accepted by the maintainer without a test run. The status stays NOT_RUN: this records the maintainer's decision to accept the open item, not a test result."
+    },
+    {
+      "id": "hw.headset_call",
+      "status": "NOT_RUN",
+      "note": "NOT RUN: a real call with a headset plugged in (call application, headset microphone and earphones in use at the same time, with the capture fix fix.capture_resync_after_jack_replay in place). The hermetic checks and the runner's jackstream run cover the plug and unplug during a capture, not a call. Listed as 'not run' in the status summary and in fix.capture_resync_after_jack_replay since 20261020.01; this gate gives the item an id so the maintainer's acceptance is recorded in one place. Accepted by the maintainer on 2026-10-20 without a test run (not tested; see the accepted field).",
+      "accepted": "2026-10-20: accepted by the maintainer without a test run. The status stays NOT_RUN: this records the maintainer's decision to accept the open item, not a test result."
+    },
+    {
+      "id": "hw.runtime_7_2_20261020_03_carried_over",
+      "status": "NOT_RUN",
+      "note": "NOT RUN for 20261020.03 on 7.2; CARRIED OVER from 20261020.01 and 20261020.02. The 7.2 modules built from 20261020.03 and from the previous release with the same PKGVER have an identical .text disassembly and identical modinfo apart from version and srcversion (cs4208 against 20261020.02); the cs4208 source identity is 79b16c8b296a3821 in all three releases. macbook91-audio-verify on 20261020.01+79b16c8b296a3821 passed on 7.2 at the boot of 2026-10-20 13:28 (31 passed, 0 failed, 2 skipped, maintainer-confirmed). The 6.18 gate boot of 2026-10-20 also installed the 7.2 module of 20261020.03 via DKMS, but 7.2 was not booted with it. No fresh 7.2 runtime PASS is claimed for 20261020.03."
+    },
+    {
+      "id": "hw.runtime_20261021_01_carried_over",
+      "status": "NOT_RUN",
+      "note": "NOT RUN for 20261021.01 on 6.18 and on 7.2; CARRIED OVER from 20261020.03 (6.18, hw.runtime_6_18_lts: macbook91-audio-verify 31 passed, 0 failed, 2 skipped on 20261020.03+7fc96add428d9fce) and from 20261020.01 (7.2, hw.runtime_7_2_20261020_03_carried_over). Evidence that the module code did not change: the tarball differs from that of 20261020.03 in comments, attribution, licence headers and non-code files only. Every changed C file (a1534_i2c.h, a1534_match.h, a1534_pcm.h, a1534_snapshot.h and the derived 6.18 and 7.2 cs420x.c) is identical to the old one once comments are stripped (gcc -fpreprocessed -dD -E -P), with equal line counts; vendored/a1534_sequence.h and vendored/ORIGINAL-a1534_sequence.h are byte-identical. Modules built from the old and the new tarball at one fixed build path (6.18.55-2-cachyos-lts with gcc, 7.2.11-1-cachyos with clang, unprivileged, nothing installed) differ only in the embedded source-identity string, the build id and, for the clang build, the source-file checksums in the line table (identical code, data and symbol sections; of the sections the kernel loads, SHF_ALLOC, only .modinfo and .note.gnu.build-id differ; the line-table checksums are the md5 sums of the changed source files, VERIFIED; the build id is expected to be a hash over the module's contents, an inference that was not checked separately). Source identity: 7.2 3459bbf7be37223c (was 79b16c8b296a3821), 6.18 2fc8b8ad2d1b2deb (was 7fc96add428d9fce). The comparison is repeated by the verification driver (step V8) and its result is in release/20261021.01/STATUS.txt. No fresh runtime PASS is claimed for 20261021.01."
+    },
+    {
+      "id": "pkg.install_20261021_01",
+      "status": "NOT_RUN",
+      "note": "NOT RUN: the package of 20261021.01 was built (make arch-pkg) and audited by tests/run-tests.sh, but not installed (pacman -U and makepkg -si NOT RUN), no DKMS build of it ran on an installed system and its modules were not loaded."
+    },
+    {
+      "id": "fix.capture_resync_after_jack_replay",
+      "status": "PASS",
+      "note": "PASS ON HARDWARE 2026-10-20: measured by regress.concurrent_capture in macbook91-runner jackstream run 20261020T063948Z-5274 (13 jackstream/identity checks PASS plus regress.jack_hotplug_stream). macbook91-audio-verify was run by the maintainer on the same install; its counts were not recorded. Not run: a real call with a headset plug (hw.headset_call, accepted by the maintainer on 2026-10-20 without a test run). Hermetic checks: tests/run-tests.sh section 3 and tests/test_lock_discipline.py."
+    },
+    {
+      "id": "regress.rollback_clean",
+      "status": "PASS",
+      "note": "design verified: dkms.conf DEST_MODULE_LOCATION=/updates and the module keeps the in-tree name, so removal + depmod restores stock. The runtime case is no longer open: hw.rollback_to_stock is PASS, proven on the test machine with pacman -R plus a reboot - the module was gone, the stock in-tree codec loaded, the codec stayed responsive and no residual configuration was left. This note previously still said 'Runtime rollback still BLOCKED', which contradicted that gate; corrected 2026-09-15."
+    },
+    {
+      "id": "build.module_clang_llvm",
+      "status": "PASS",
+      "note": "builds clean against the installed 7.2.6-1-cachyos headers; .comment = clang version 22.1.8. Re-measured 2026-09-21 on the DKMS-built module of that day's release, which no longer requires clang as a package dependency - the Makefile takes the family from the target kernel's own .config, and this kernel is CONFIG_CC_IS_CLANG=y."
+    },
+    {
+      "id": "build.vermagic_match",
+      "status": "PASS",
+      "note": "vermagic 7.2.6-1-cachyos matches the running kernel. Re-measured 2026-09-21 on the module DKMS built for 7.2.6-1-cachyos; the previous reading was 7.2.4-3-cachyos, before the kernel update."
+    },
+    {
+      "id": "build.module_provenance",
+      "status": "PASS",
+      "note": "MODULE_VERSION = pkgver + sha256 of the four source files; verifier reads /sys/module/.../version"
+    },
+    {
+      "id": "pkg.makepkg_clean",
+      "status": "PASS",
+      "note": "make arch-pkg builds macbook91-cs4208-dkms-20261021.01-1-x86_64.pkg.tar.zst from the pinned tarball (built 2026-10-21 on 6.18.55-2-cachyos-lts). The package is a local build, not published; its checksum is in release/20261021.01/STATUS.txt for reference only."
+    },
+    {
+      "id": "pkg.srcinfo_consistent",
+      "status": "PASS",
+      "note": ".SRCINFO matches makepkg --printsrcinfo (re-run 2026-10-21 for 20261021.01)"
+    },
+    {
+      "id": "pkg.namcap_clean",
+      "status": "PASS",
+      "note": "0 errors; 4 warnings explained in docs/NAMCAP.md (re-run 2026-10-21 on the 20261021.01 package; namcap on the PKGBUILD prints nothing)"
+    },
+    {
+      "id": "pkg.shellcheck",
+      "status": "PASS",
+      "note": "shellcheck -S warning clean on the shipped shell scripts (tools/, packaging/, tests/run-tests.sh), re-run 2026-10-21 for 20261021.01"
+    },
+    {
+      "id": "hw.fixup_selected_a1534",
+      "status": "PASS",
+      "note": "live on the test machine: 'CS4208: MacBook9,1 (A1534) detected, codec SSID 106b:6500' in the boot log"
+    },
+    {
+      "id": "hw.a1534_initialised",
+      "status": "PASS",
+      "note": "live: PCM bound to converter 0x0a (Device: CS4208 Analog), pin 0x1d Pin-ctls 0x40 OUT, digital converter Enabled"
+    },
+    {
+      "id": "hw.alsa_playback",
+      "status": "PASS",
+      "note": "On the test machine, an early test build (2026-09-14): headphone output works incl. KDE front-left/front-right test"
+    },
+    {
+      "id": "hw.alsa_capture",
+      "status": "PASS",
+      "note": "On the test machine, an early test build (2026-09-14): capture works, user confirmed the source is the internal mic"
+    },
+    {
+      "id": "hw.pipewire_exposure",
+      "status": "PASS",
+      "note": "live: PipeWire 1.6.8 sink present and default  Re-measured 2026-09-15 under the headphone-fix profile set: profile output:analog-surround-40+input:analog-stereo active and available:yes with the jack plugged, sink present and default, source present."
+    },
+    {
+      "id": "hw.speakers_audible",
+      "status": "PASS",
+      "note": "On the test machine, an early test build (2026-09-14): all four channels audible through the normal desktop path; verifier PASS"
+    },
+    {
+      "id": "hw.headphone_hotplug",
+      "status": "PASS",
+      "note": "On the test machine, an early test build (2026-09-14): user confirmed audio moves to headphones and returns to speakers"
+    },
+    {
+      "id": "hw.microphone",
+      "status": "PASS",
+      "note": "works and user-confirmed; the verifier flags clipping because Capture Volume and Internal Mic Boost are at maximum, which is the stock default, not a regression here"
+    },
+    {
+      "id": "hw.hdmi_preserved",
+      "status": "SKIPPED",
+      "note": "SKIPPED by the maintainer's decision, 2026-09-15: this machine is practically never connected to an external display, so HDMI is not part of the validated scope. The audio task statement's DONE definition allows this explicitly, and it limits the validation scope rather than satisfying it. Nothing in the headphone-fix profile set of 2026-09-15 removes the HDMI mappings - the shipped profile set carries hdmi-stereo, hdmi-surround, hdmi-surround71 and the two extra outputs, unchanged from the stock set - but that is a reading of the configuration, not a measurement."
+    },
+    {
+      "id": "hw.hdmi_under_fixed_profile",
+      "status": "SKIPPED",
+      "note": "SKIPPED by the maintainer's decision, 2026-09-15, for the same reason as hw.hdmi_preserved. The concern stands unmeasured: api.acp.auto-profile and api.acp.auto-port are false for the whole card, which also hosts the HDMI codecs, so connecting a display may not activate an HDMI profile by itself and may need a manual profile change. Anyone who does connect one should expect that and report it."
+    },
+    {
+      "id": "hw.deep_suspend_resume",
+      "status": "FAIL",
+      "note": "WITHDRAWN CONCLUSION, 2026-09-14: see docs/CLAIMS-AUDIT.md and the fix.cvt_chan_count_programmed gate. The read procedure behind 'cannot be reached over the codec's I2C master' returned the same value for a populated and an empty I2C address, so that half was never shown. The measurement below is real and is kept; only the amplifier conclusion is withdrawn. ISOLATED, 2026-09-14. A self-verifying triage shows headphones AUDIBLE after a resume through the same hw:0,0 4-channel stream, while the speakers are silent with playback confirmed OK. Controller, DMA, codec, analog path and driver logic are therefore all working; the fault is only in converter 0x0a -> pin 0x1d -> TDM -> the four TAS5758L amplifiers, which lose their configuration when their supply drops and cannot be reached over the codec's I2C master. Not fixable from the driver with current knowledge."
+    },
+    {
+      "id": "hw.dkms_kernel_update",
+      "status": "PASS",
+      "note": "PASS 2026-09-21, under that day's release, and the whole lifecycle this gate is about ran end to end. First the kernel update 7.2.4-3-cachyos -> 7.2.6-1-cachyos rebuilt the module through DKMS; then the new release was installed over the previous one and DKMS rebuilt it again against the 7.2.6-1-cachyos headers (dkms status: installed). Before the reboot the loaded module still carried the previous package version while the on-disk one carried the new one, both with source identity d66e29685163c194 - measured, and the reason the reboot was not skipped. After the reboot /sys/module/snd_hda_codec_cs420x/version reads the new package version with d66e29685163c194, vermagic 7.2.6-1-cachyos, and the boot log carries 'CS4208: MacBook9,1 (A1534) detected, codec SSID 106b:6500'. The maintainer then ran macbook91-audio-verify in a terminal, with the listening checks actually answered rather than skipped: 27 passed, 0 failed, 2 skipped, 'PASS  MacBook9,1 audio verified.' An earlier non-interactive run from the agent session is NOT what closes this gate - without a TTY its three listening checks recorded SKIPPED, and it read 22 passed, 0 failed, 5 skipped."
+    },
+    {
+      "id": "hw.rollback_to_stock",
+      "status": "PASS",
+      "note": "proven on the test machine: pacman -R + reboot removed the module, stock in-tree codec loaded, codec responsive, no residual config"
+    },
+    {
+      "id": "hw.converter_for_speakers",
+      "status": "PASS",
+      "note": "RESOLVED from evidence, no hardware needed: speakers are converter 0x0a -> pin 0x1d, format 0x4013 = 44100 Hz / 16-bit / 4 ch. Converter 0x04 is only enumerated and then left in D3. See docs/ROOT-CAUSE.md \u00a74."
+    },
+    {
+      "id": "regress.readme_install_destinations",
+      "status": "PASS",
+      "note": "tests/run-tests.sh, added 2026-09-21 (2026-09-21 change): every install -D destination outside /usr/src must be named in the packaged README's Rollback section. The expectation is derived from what installs the files, not restated (packaging/PKGBUILD when the test was added, the root Makefile's install target now), and the check fails if it parses a different number of destinations than there are install -D lines. Proved by adding a throwaway sixth destination to a scratch copy: FAIL, naming the file."
+    },
+    {
+      "id": "regress.patch_line_counts",
+      "status": "PASS",
+      "note": "tests/run-tests.sh, added 2026-09-21 (2026-09-21 change): the added/removed line counts in LOCAL-CHANGES.md are recomputed from local-changes.patch and compared. They had read 51/2 while the patch measured 270/3. Not gated on the assembled tree - both files are tracked, so it runs in a fresh clone. Proved by a scratch copy saying 269: FAIL, printing both numbers."
+    },
+    {
+      "id": "hw.jack_callback_pin_reval",
+      "status": "PASS",
+      "note": "PASS ON HARDWARE 2026-10-06, under the release of that day on kernel 7.2.9-1-cachyos. The 2026-09-21 jack-callback commit moved the speaker-pin write in a1534_hp_jack_callback() into the final locked region, re-validated against st->hp. The released package was installed with pacman -U and the machine rebooted; /sys/module and modinfo both read source identity 679b7fd96a54c7de. macbook91-runner jackstream, run 20261006T081744Z-3324: 13/13 PASS (jack 'on' after the plug, 'off' after the unplug, playback alive and capture growing across both transitions, loaded srcversion matching the module on disk). macbook91-audio-verify: 27 passed, 0 failed, 2 skipped, listening checks answered by the maintainer. A first jackstream attempt, run 20261006T081701Z-3039, was BLOCKED (playback never started) and is not counted. Correction 2026-10-19: in that jackstream run the headphones were already in before the plug prompt, so its plug half measured nothing; a capture does not survive a plug (regress.concurrent_capture, docs/INCIDENT-20261019.md)."
+    },
+    {
+      "id": "regress.suite",
+      "status": "PASS",
+      "note": "tests/run-tests.sh: 253 passed, 0 failed, 9 blocked (measured 2026-10-21 on the committed tree of the release with the package that make arch-pkg built for 20261021.01, run under the 6.18.55-2-cachyos-lts kernel on a host with the replacement module loaded; hermetic, no hardware; the hardware checks it cannot run stay BLOCKED). A host that runs the stock codec runs one more test and blocks the two checks that compare these records: 252 passed, 0 failed, 10 blocked (derived: the scratch-copy simulation of the tree before the last test was removed gave 253 passed, 0 failed, 10 blocked; NOT RUN on such a host)"
+    },
+    {
+      "id": "regress.license_identifiers",
+      "status": "PASS",
+      "note": "tests/run-tests.sh 4e, added 2026-10-20 (the GPL-2.0-or-later build files since the same day): every own file with comment syntax names on an SPDX line the license README.md's map gives it; LICENSE and LICENSES/ hold the GPL-3.0, GPL-2.0, LGPL-2.1 and BSD-3-Clause texts"
+    },
+    {
+      "id": "regress.verifier_honesty",
+      "status": "PASS",
+      "note": "two false-FAIL bugs found on the first hardware run are fixed and guarded by tests"
+    },
+    {
+      "id": "regress.kernel_series_guard",
+      "status": "PASS",
+      "note": "build refuses a kernel series other than the vendored headers' (7.2), with an explicit override"
+    },
+    {
+      "id": "regress.generic_stereo_not_four_ch",
+      "status": "PASS",
+      "note": "live: hw:0,0 reports channels [2 4]; the stock generic path reported 2"
+    },
+    {
+      "id": "regress.verifier_pipefail_guard",
+      "status": "PASS",
+      "note": "guards against the pipefail+grep -q false negative and the doubled-Node awk pattern"
+    },
+    {
+      "id": "hw.codec_stability",
+      "status": "PASS",
+      "note": "On the test machine, an early test build (2026-09-14): no wedge; survived headphone hotplug, the trigger that deadlocked the first test build"
+    },
+    {
+      "id": "regress.lock_discipline",
+      "status": "PASS",
+      "note": "static check that no PM-triggering call runs under st->lock; verified to catch the pattern of the first test build"
+    },
+    {
+      "id": "regress.a1534_gpio_mask",
+      "status": "PASS",
+      "note": "A1534 GPIO mask/dir override the mainline gpio0 fixup so the amplifier DFETs stay enabled"
+    },
+    {
+      "id": "hw.jack_detect_polarity",
+      "status": "PASS",
+      "note": "measured on stock driver: off unplugged, on plugged. Not inverted; inv_jack_detect must NOT be set."
+    },
+    {
+      "id": "hw.a1534_gpio_supply",
+      "status": "PASS",
+      "note": "On the test machine, an early test build (2026-09-14): IO[4] and IO[5] enabled outputs, matching the bring-up's mask 0x37/dir 0x31. Under the first test build only IO[0] was enabled."
+    },
+    {
+      "id": "hw.speaker_4ch_audible",
+      "status": "PASS",
+      "note": "test machine: 4-channel tone played directly to hw:0,0 is audible on the internal speakers. The amplifiers and bring-up are correct; the blocker was the 2-channel PipeWire profile."
+    },
+    {
+      "id": "hw.speaker_volume_control",
+      "status": "PASS",
+      "note": "On the test machine, an early test build (2026-09-14): api.alsa.soft-mixer active, slider changes level as expected"
+    },
+    {
+      "id": "hw.speaker_channel_map",
+      "status": "PASS",
+      "note": "measured per slot on the test machine: 0 left, 1 right, 3 right, 2 central. Two drivers per side (two stereo pairs), strongly indicated - listener unsure on slots 2 and 3. Stereo reaches all four via channelmix.upmix simple."
+    },
+    {
+      "id": "regress.safe_test_level",
+      "status": "PASS",
+      "note": "verifier tone is 12% of full scale with fades; speaker-test is not invoked"
+    },
+    {
+      "id": "regress.softvol_config_shape",
+      "status": "PASS",
+      "note": "drop-in must define monitor.alsa.rules exactly once, no +=, balanced brackets; verifier must gate on soft-mixer being active"
+    },
+    {
+      "id": "hw.speaker_audio_quality",
+      "status": "PASS",
+      "note": "On the test machine, an early test build (2026-09-14): distortion gone at 44.1 kHz; all four channels distinct in KDE's test"
+    },
+    {
+      "id": "hw.speaker_rate_44100",
+      "status": "PASS",
+      "note": "measured on the test machine: same tone clean at 44100 Hz, distorted at 48000 Hz. Driver now restricts the speaker PCM to 44.1 kHz."
+    },
+    {
+      "id": "regress.resume_replay",
+      "status": "PASS",
+      "note": "replay must not key off power_state.event; validity flag cleared on suspend and honoured on resume"
+    },
+    {
+      "id": "hw.resume_bringup_measured",
+      "status": "PASS",
+      "note": "instrumented resume proves the bring-up sequence is inert on a codec that was not reset; retires the external-amplifier speculation"
+    },
+    {
+      "id": "hw.resume_probe_measured",
+      "status": "PASS",
+      "note": "probe-path instrumentation disproves that setup_a1534() establishes the configuration; three prior hypotheses rested on that assumption"
+    },
+    {
+      "id": "hw.suspend_limitation_reported",
+      "status": "PASS",
+      "note": "driver logs the lost-configuration state once and the verifier names it, instead of surfacing as unexplained silence"
+    },
+    {
+      "id": "hw.suspend_firmware_restore",
+      "status": "FAIL",
+      "note": "REFUTED by measurement. A privileged read of widget 0x24 post-suspend returns the probe-time firmware values byte for byte: the coefficient space survives S3 intact, so there was never anything to restore. The seven 'differing' coefficients an earlier test build reported were stale regmap-cache reads taken inside .resume. Coefficient restore removed later the same day."
+    },
+    {
+      "id": "regress.snapshot_gated",
+      "status": "PASS",
+      "note": "snapshot only taken while pin 0x1d still reads 0x90100110; restore requires a populated snapshot and only runs in the already-broken state; all three guards verified to fail when removed"
+    },
+    {
+      "id": "evidence.applehda_no_amp_code",
+      "status": "PASS",
+      "note": "re-checked against the Mach-O binaries, not filtered strings: no i2c/tdm/dfet/tas57 hits in AppleHDAController, AppleHDAHardwareConfigDriver, DspFuncLib; IOHDAFamily hits are DMA false positives; AppleMikeyDriver hits are the headset-remote SMBus path"
+    },
+    {
+      "id": "evidence.applehda_main_binary_missing",
+      "status": "PASS",
+      "note": "RESOLVED. Contents/MacOS/ genuinely does not exist in Monterey - since Big Sur the executable lives only in the kernel collection, so the earlier archive was not at fault. The binary has now been obtained from there; see evidence.applehda_main_binary_obtained."
+    },
+    {
+      "id": "evidence.trace_is_foreign_machine",
+      "status": "FAIL",
+      "note": "WITHDRAWN CONCLUSION, 2026-09-14: the claim that the vendored trace came from another machine is refuted, not confirmed. It rested on a comparison of the pin configs the trace expects against values read after a deep sleep (the codec's hardwired fallback, not its normal state). In the working state this machine reads exactly the pin configs the trace expects (measured 2026-09-14). Where the sequence came from is not known (src/cs420x-a1534/vendored/PROVENANCE.md)."
+    },
+    {
+      "id": "hw.amp_i2c_bringup",
+      "status": "BLOCKED",
+      "note": "WITHDRAWN 20260914.04. The finding was 'amp addresses answer identically to address 0x20, therefore the amplifiers are not reachable'. That is an uncalibrated instrument reporting on itself: the identical answer appeared in the WORKING state, where the amplifiers are known to be alive, so the procedure cannot distinguish a present device from an absent one and has measured neither. Additionally the kernel read path omitted the closing STOP that Apple's i2cRead sends, so it was not even the same protocol as the userspace probes it was compared against. Blocked on transport.discriminates."
+    },
+    {
+      "id": "evidence.applehda_main_binary_obtained",
+      "status": "PASS",
+      "note": "com.apple.driver.AppleHDA extracted from BaseSystemKernelExtensions.kc in the official macOS recovery image for board Mac-9AE82516C7C6B903 (product 012-40515, Monterey 12.5.x). Apple's RSA-signed chunklist verified: signature valid, 63/63 chunks. Binaries kept outside the repo."
+    },
+    {
+      "id": "evidence.amp_protocol_recovered",
+      "status": "PASS",
+      "note": "AppleHDAFunctionGroupCS4208::{enableI2C,i2cRead,i2cWrite} operate on vendor widget 0x24 coefficients 0x14/0x15/0x16/0x17; AppleHDATDMAmpTAS5758L::enable writes 8 registers with the TDM slot OR'd into 0x03. See docs/AMPLIFIER-PROTOCOL.md."
+    },
+    {
+      "id": "regress.amp_protocol_constants",
+      "status": "PASS",
+      "note": "coefficient map, the 8-entry register table and the four amp addresses/slots are all guarded; each guard verified to fail when the value is tampered with"
+    },
+    {
+      "id": "regress.no_pincfg_write",
+      "status": "SKIPPED",
+      "note": "SUPERSEDED by regress.pincfg_restored, 2026-09-14. This gate asserted the snapshot path must never write AC_VERB_SET_CONFIG_DEFAULT, on the belief that an earlier test build did so and left the microphone pins reading 0x400000f0. The full read-only dump later settled this: in the WORKING state those same pins really do read 0x400000f0 while the microphone works, so the muted microphone was a saved ALSA mixer state, not this write. The product now deliberately restores pin configuration defaults; kept here, marked, rather than deleted, so the reversal stays legible."
+    },
+    {
+      "id": "regress.pincfg_restored",
+      "status": "PASS",
+      "note": "pin configuration defaults ARE restored from the probe-time snapshot on a deep-sleep resume; see the checks 'snapshot restores the captured pin configuration defaults' and 'restore does not read back on the resume path' in tests/run-tests.sh for the current reasoning and the guard test"
+    },
+    {
+      "id": "regress.amp_optin",
+      "status": "PASS",
+      "note": "amplifier bring-up is gated behind a1534_amp, default off, while the transport is unproven"
+    },
+    {
+      "id": "hw.suspend_self_cancel",
+      "status": "NOT_RUN",
+      "note": "OPEN QUESTION, not attributed to this driver: suspend entered and resumed ~6s later with no abort logged. HDA PCI wakeup is disabled, every codec GPIO has wake=0, /sys/power/pm_wakeup_irq is empty. No evidence the codec is the wake source; cause not established."
+    },
+    {
+      "id": "hw.coef_survive_suspend",
+      "status": "FAIL",
+      "note": "WITHDRAWN - the measurement was contaminated. It was taken while a test build that still restored coefficients on resume was loaded, so the probe read the driver's own write. Clean measurement under the next build, which restores nothing: coef 0x00 goes 0x00c4 -> 0x0000 across S3. Some coefficients ARE lost; restoring them (an earlier test build) still did not restore sound."
+    },
+    {
+      "id": "hw.powerrail_verbs_restored",
+      "status": "FAIL",
+      "note": "RUN: no effect, and there is nothing to restore. At probe in the working state 0x7f0, 0x7f1 and the unsolicited register all read 0x0, so the registers Apple re-issues after a rail loss carry no state on this machine."
+    },
+    {
+      "id": "regress.no_coef_write",
+      "status": "PASS",
+      "note": "snapshot logs coefficients as evidence but never writes them back"
+    },
+    {
+      "id": "evidence.regmap_cache_hazard",
+      "status": "FAIL",
+      "note": "REFUTED 20260914.04. snd_hda_codec_read/write reach the controller through snd_hdac_exec_verb with the HDA regmap cache nowhere in the path (linux-7.2.4 sound/hda/core/device.c:1066-1091); the cached variant snd_hda_codec_write_cache() is not used here. Coefficient reads inside .resume are NOT answered from a cache. Kept as a record so the refuted claim is not revived."
+    },
+    {
+      "id": "hw.mic_capture",
+      "status": "PASS",
+      "note": "RESOLVED and not a driver defect: /var/lib/alsa/asound.state held Capture Volume 0,0 and Capture Switch false,false saved 2026-09-14 12:20, replayed by alsa-restore at every boot. Set to 63/on and stored.  Re-measured 2026-09-15 under the headphone-fix profile set, with headphones plugged: pw-record from the default source gave 4 s of real signal, peak 0.11 of full scale, rms 0.0038 - not null, not clipping. Which microphone it was is not established by this measurement; the verifier's user question is what settles that."
+    },
+    {
+      "id": "evidence.probe_must_be_readonly",
+      "status": "PASS",
+      "note": "Rule adopted after the third contaminated measurement: a probe must not run against a driver that writes the registers being probed. macbook91-codec-dump issues no writes at all."
+    },
+    {
+      "id": "hw.pin1d_survives_suspend",
+      "status": "PASS",
+      "note": "Test build of 2026-09-14: 'restored 128 coefficients, 19 pin configs, digi 0x111' and pin 0x1d reads 0x90100110 after a resume - the first time the marker has ever come back"
+    },
+    {
+      "id": "rootcause.stream_width",
+      "status": "PASS",
+      "note": "speaker silence after resume traced to converter 0x0a stream_format 0x4013 -> 0x4033, i.e. S16_LE -> S32_LE chosen by PipeWire on renegotiation; the TDM frame is 4 x 16 bits"
+    },
+    {
+      "id": "regress.pcm_16bit_only",
+      "status": "PASS",
+      "note": "speaker PCM pins .formats = SNDRV_PCM_FMTBIT_S16_LE and .maxbps = 16"
+    },
+    {
+      "id": "rootcause.headphone_mute",
+      "status": "PASS",
+      "note": "headphone silence was Master Playback Switch off / Volume 0 in /var/lib/alsa/asound.state. Master drives the amp-equipped outputs (node 0x02); the speaker path has no amp, so it was unaffected. Setting it moved node 0x02 from 0x00 to 0x66."
+    },
+    {
+      "id": "regress.grep_code_sigpipe",
+      "status": "PASS",
+      "note": "test harness grep_code was 'grep -v | grep -q' under pipefail, returning 141 on an early match and reporting a successful match as a failure; rewritten without a pipeline"
+    },
+    {
+      "id": "rootcause.acp_port_jack_coupling",
+      "status": "PASS",
+      "note": "IDENTIFIED AND FIXED 2026-09-15, reproduced on the test machine within the hour the maintainer reported it. The stock ACP path analog-output-speaker declares '[Jack Headphone] state.plugged = no'. This card's only analog output mapping (analog-surround-40, the one configuration the PCM accepts) has exactly that single port, and the driver serves headphones through it by switching converters itself. A plugged jack therefore made the port unavailable, the profile with it, and WirePlumber selected input:analog-stereo - a card with no sink, shown as 'Schein-Ausgabe'/Dummy Output, silent on speakers and headphones alike. Surfaced 84 s after the resume at 20:50:57 because profile selection reruns there. api.acp.auto-profile/auto-port = false were necessary but never sufficient: they stop a switch, not the profile going unavailable."
+    },
+    {
+      "id": "regress.acp_profile_set_shipped",
+      "status": "PASS",
+      "note": "run-tests.sh: the package carries contrib/acp/macbook91-cs4208.conf and macbook91-output-speaker.conf, the drop-in selects the set by absolute path, the set names the output path by absolute path, the PKGBUILD installs both at exactly those paths, and the analog mapping is four-channel. Cross-file, because a rename in any one of the three files is silent at build time and fatal at run time. Also: the trailing .include of alsa-card-profiles' own analog-output.conf.common must be absolute, and the verifier must name that file if it ever goes missing - the symptom then is no port and no sink, identical to the bug this fixes, from a different cause."
+    },
+    {
+      "id": "regress.output_path_not_jack_gated",
+      "status": "PASS",
+      "note": "run-tests.sh greps the shipped output path for any [Jack Headphone]/[Jack Line Out] stanza and fails if one reappears. This is the regression itself, not a proxy for it."
+    },
+    {
+      "id": "regress.verifier_gates_profile_set",
+      "status": "PASS",
+      "note": "run-tests.sh requires macbook91-audio-verify to carry both new gates, so the failure mode cannot go silent again after reaching the maintainer once."
+    },
+    {
+      "id": "hw.headphone_audible_with_profile_set",
+      "status": "PASS",
+      "note": "CONFIRMED ON HARDWARE by the maintainer, 2026-09-15: with the profile set active and the headphones inserted while it was live, a tone was audible through the headphones. The profile and the default sink survived the insertion, hw_params read S16_LE/44100/4ch throughout, and pin 0x10 went to D0 with Pin-ctls 0xc0 OUT HP. Playback path only; this gate says nothing about capture or about a cold boot with the jack already in - see hw.cold_boot_jack_plugged."
+    },
+    {
+      "id": "hw.cold_boot_jack_plugged",
+      "status": "PASS",
+      "note": "MEASURED 2026-09-15 as full profile re-selection with the jack plugged: `systemctl --user restart wireplumber` rebuilds the ACP card object and reruns profile selection exactly as a boot does, and it was run twice with headphones in the socket and the packaged configuration in place - both times the card came up on output:analog-surround-40+input:analog-stereo with available:yes and a default sink. The reverse case is measured too: with the headphones out, after the 21:59 reboot, the card is on the same profile with a sink. LIMIT: a boot *verified* to have begun with the plug already inserted has not been observed. The 21:59 reboot came up on the right profile, but the jack state at that instant was not recorded."
+    },
+    {
+      "id": "hw.headphones_after_resume",
+      "status": "PASS",
+      "note": "MEASUREMENT, not product function. Headphones were audible after S3 through the 4-channel PCM routed to converter 0x02. This is a valid positive control for the controller, DMA, codec command path and jack logic. It says nothing about converter 0x0a, pin 0x1d, TDM framing or the amplifiers, and a1534_format_for() gives converter 0x02 a different channel nibble, so the two paths are not identically programmed. It also ran AFTER a GPIO sweep, a module reload and an optional PCI rescan. See docs/CLAIMS-AUDIT.md A."
+    },
+    {
+      "id": "hw.controller_reset_no_effect",
+      "status": "PASS",
+      "note": "MEASUREMENT, not product function. An HDA PCI remove+rescan after a resume did not restore speaker audio, with playback confirmed OK. Valid as a negative result about that one intervention. See docs/CLAIMS-AUDIT.md."
+    },
+    {
+      "id": "hw.s2idle_preserves_audio",
+      "status": "FAIL",
+      "note": "RUN and NEGATIVE, maintainer-reported 2026-09-14: after the s2idle cycle at 13:45:21 the internal speakers were not audible. s2idle does not enter S3 and keeps platform rails up, so this is evidence against the amplifier-supply story - not proof, because the codec can still reach D3 under s2idle and the DFET GPIOs are codec-driven. Deep and s2idle now both fail identically. See CLAIMS-AUDIT.md D2."
+    },
+    {
+      "id": "transport.discriminates",
+      "status": "FAIL",
+      "note": "RUN 2026-09-14 12:55 UTC, in the cold-boot working state with the speakers audible. All four amplifier addresses AND all three control addresses returned the identical all-zero register map. The read path cannot distinguish a present device from an absent one, so it is not an instrument. This is a statement about the procedure, NOT about the amplifiers: nothing may be concluded from it in either direction."
+    },
+    {
+      "id": "transport.coef_writes_stick",
+      "status": "PASS",
+      "note": "RUN: coefficient 0x14 read back 0x0055, 0x00aa and 0x0000 exactly as written, and the bridge enable in coefficient 0x00 latched 0x00c4 -> 0x00cc with bit 3 set. Coefficient writes reach the hardware. Coefficient 0x15 is the exception: a written register number never reads back."
+    },
+    {
+      "id": "transport.engine_responds",
+      "status": "BLOCKED",
+      "note": "RUN and INCONCLUSIVE. With the bridge open and with it closed, coefficient 0x16 read back 0x0004 after a START. That is what a plain latch looks like and equally what a level control line looks like, one that stays asserted until written again. The test cannot separate them, so it is not a finding either way."
+    },
+    {
+      "id": "apple.i2c_read_stop_missing",
+      "status": "PASS",
+      "note": "FIXED. Apple's i2cRead (0x9c2f1e) ends with set(0x16,0x02) plus a status read; a1534_i2c_read() omitted both. docs/APPLE-I2C-AUDIT.md section 7 D1."
+    },
+    {
+      "id": "apple.amp_table_from_binary",
+      "status": "PASS",
+      "note": "The 8-entry TAS5758L table was re-derived directly from the static initialiser at 0xa48c42 and matches a1534_i2c.h byte for byte. Read-back is skipped for register 0x08, matched by register number. docs/APPLE-I2C-AUDIT.md section 8."
+    },
+    {
+      "id": "apple.layout_amp_topology",
+      "status": "PASS",
+      "note": "layout121.xml declares four TDMDevices, Device 22360 = 0x5758, I2Caddress 108-111, Bus 1/1/2/2, TDMSlot 0/1/0/1, CHDFETControl GPIO 4, USDFETControl GPIO 5, AmpFaultGPIO 1, AmpFaultOn 0, IntSpeaker AmpPreDelay 75 / AmpPostDelay 12 / EarlyAmpMuteDelay 20."
+    },
+    {
+      "id": "apple.no_i2c_bus_dispatch",
+      "status": "PASS",
+      "note": "TAS5758L::enable calls i2cWrite(I2Caddress, reg, val) with no bus argument. 'Bus 1/2' in the layout are TDM audio buses. No bus selection is missing from a1534_i2c.h."
+    },
+    {
+      "id": "runner.single_entry_point",
+      "status": "PASS",
+      "note": "tools/macbook91-runner: selfcheck and preflight run unprivileged and pass on the test machine; one run directory under ~/.local/state/macbook91-cs4208/runs that survives a reboot; PASS/FAIL/BLOCKED/NOT_RUN/SKIPPED per test; a mandatory test never reached is NOT_RUN and forces verdict INCOMPLETE."
+    },
+    {
+      "id": "runner.unit_state_faithful",
+      "status": "PASS",
+      "note": "Unit save/restore records each unit's exact prior mask state, restores only its own changes, leaves an already-masked unit masked, runs from a trap on EXIT/INT/TERM, verifies the result and prints manual recovery on failure. Exercised by selfcheck against a non-existent unit."
+    },
+    {
+      "id": "env.deep_sleep_selected",
+      "status": "PASS",
+      "note": "After the reboot of 2026-09-14 14:25:20 /sys/power/mem_sleep reads 's2idle [deep]' - deep is selected again. The earlier s2idle selection did not survive the reboot."
+    },
+    {
+      "id": "tool.codec_dump_overclaims",
+      "status": "PASS",
+      "note": "RESOLVED 2026-09-14: the header no longer claims 'no writes of any kind'; it now states exactly what is written (128 SET_COEF_INDEX coefficient-selector writes on widget 0x24, no data register writes) and points to macbook91-codec-state as the capability-gated successor for new work. The remaining substantive criticisms are known limitations of a superseded tool, not an open defect: 1209 is a count of printed fields, not of independent valid hardware reads; it duplicates pin_sense; it has no capability-derived register map; it reads no amplifier register; it skips some OSError and can mask a None."
+    },
+    {
+      "id": "apple.amp_programmed_from_init",
+      "status": "PASS",
+      "note": "AppleHDATDMAmpTAS5758L::init ends with this->enable(true) at 0xa2e126 (vptr+0x1a8 -> 0xa2e1b4). macOS programs the amplifiers itself, once, when setupTDMDevices builds the TDM device list; AppleHDAPath::enable never calls that slot, so it is not per stream. 'Mac firmware programs them at power-on' is contradicted for the programming step."
+    },
+    {
+      "id": "apple.amp_has_no_resume_path",
+      "status": "PASS",
+      "note": "TAS5758L has neither performPowerRailSave nor performPowerRailRestore; TAS5764L has both, as do AppleHDAWidgetCS4208, AppleHDAFunctionGroupCS8409 and AppleHDATDM_CS42L83. macOS does nothing to reprogram these amplifiers after a sleep. Either their configuration survives - which would make the resume fault codec- or TDM-side - or something outside AppleHDA re-establishes it. See CLAIMS-AUDIT.md D6."
+    },
+    {
+      "id": "apple.layouts_not_identical",
+      "status": "PASS",
+      "note": "layout 127 and 129 are NOT wholly identical to 121, as previously recorded; only their TDMDevices and DFET control blocks are. The amplifier topology claim holds whichever layout MacBook9,1 selects. Decoded copies are kept outside this repository."
+    },
+    {
+      "id": "tool.probe_vendor_id_node",
+      "status": "PASS",
+      "note": "FIXED. macbook91-amp-transport read AC_PAR_VENDOR_ID from the audio function group; it lives on the root node 0x00, so the AFG answered 0 and the probe declared a CS4208 not to be a CS4208. Both privileged runs either side of a suspend were lost at that gate. The AFG is now discovered from NODE_COUNT/FUNCTION_TYPE and the state is recorded before any verdict."
+    },
+    {
+      "id": "tool.codec_state_capability_gated",
+      "status": "PASS",
+      "note": "tools/macbook91-codec-state: node list from the codec's own NODE_COUNT, every field gated on the widget's advertised capability, '<unsupported>' / '<error N>' / '<no-response>' all distinct from 0, coefficient index saved and restored, and it does not claim to be read-only. diff labels volatile fields. Fixture-tested."
+    },
+    {
+      "id": "hw.state_capture_working_vs_fault",
+      "status": "PASS",
+      "note": "RUN 2026-09-14 12:55 UTC. Cold boot with speakers AUDIBLE, then one deep suspend, both captured with macbook91-codec-state: 35 nodes, 582 fields, 0 read errors each. EXACTLY ONE functional field differs: subsystem_id_verb 106b6500 -> 10134208. The 128 coefficients, all 19 pin configuration defaults, every pin control, every amplifier gain/mute, every power state, every stream format and GPIO 0x07/0x37/0x31 are all byte-identical. CAVEAT: taken at rest, with every widget in D3. Repeat with probe --with-stream."
+    },
+    {
+      "id": "hw.ssid_lost_on_deep_resume",
+      "status": "FAIL",
+      "note": "MEASURED: verb 0xF20 on the AFG returns 0x106b6500 at cold boot and 0x10134208 after a deep resume - the same degradation a PCI re-probe causes. The subsystem id register is firmware-programmed state that the suspend destroys, and it is the ONLY readable firmware-owned register the driver does not restore. Diagnostically it is the fingerprint of a codec reset; it is not expected to affect audio, and must not be 'fixed' as though it would."
+    },
+    {
+      "id": "tool.state_capture_missed_stripe",
+      "status": "PASS",
+      "note": "FIXED. macbook91-codec-state had a fixed verb list after all and omitted STRIPE_CONTROL (0xf24), which converters 0x02 and 0x0a both advertise and which the vendored macOS trace reads on seven converters expecting 0x00100000. Added with CVT_CHAN_COUNT, SDI_SELECT and the per-widget PCM capability. The 582-field comparison above predates this and did not cover them."
+    },
+    {
+      "id": "hw.state_capture_streaming",
+      "status": "PASS",
+      "note": "RUN 2026-09-14 13:09/13:10 UTC. Cold boot, speakers audible (maintainer-confirmed); one deep suspend; speakers silent (maintainer-confirmed). 722 capability-validated fields either side, at rest AND with a 4-channel stream of digital silence running. Result: converter 0x0a cvt_chan_count 0x03 -> 0x00 in both comparisons. That is the defect. subsystem_id_verb also degrades, but it is identity, not function. Caveat found 2026-10-15: that capture read every amplifier gain/mute field as input amplifier, right channel, index 0, so amplifier output state was not compared. tools/macbook91-codec-state addresses them correctly since then (unreleased); no new capture was made."
+    },
+    {
+      "id": "hw.cvt_chan_count_lost",
+      "status": "FAIL",
+      "note": "THE DEFECT, measured: converter 0x0a's channel count register holds channels-1 and goes 0x03 -> 0x00 across a suspend, so the converter emits one channel into a four-slot TDM frame while the format word still reads 0x4013. Not restored by anything: regmap.c:132 excludes AC_VERB_GET_CVT_CHAN_COUNT from the writeable set ('managed in HDMI CA code') so regmap_sync never replays it, and the vendored macOS trace never writes it. Converter 0x02 has no such field, which is why headphones always worked."
+    },
+    {
+      "id": "fix.cvt_chan_count_programmed",
+      "status": "PASS",
+      "note": "CONFIRMED ON HARDWARE by the maintainer, 2026-09-14: with the channel-count fix installed, sound from the internal speakers both before and after a deep suspend, repeatedly, where every earlier release was silent after the first resume. The kernel log carries 'converter 0x0a channel count 4' on each resume. NOT a full acceptance: the formal protocol is three consecutive cycles with a long S3 among them, and every S3 measured so far lasted seconds because of the lid wake - see hw.long_suspend_coverage."
+    },
+    {
+      "id": "hw.suspend_is_real",
+      "status": "PASS",
+      "note": "The S3 path runs in full - 'Preparing to enter system sleep state S3', NVS saved, non-boot CPUs offlined, 'Waking up from system sleep state S3' - and /sys/power/suspend_stats reports success 2 with every failure counter 0. The codec loses its subsystem id, channel count and pin 0x1d across it, which only happens when it is actually powered down. The audio comparisons were taken across genuine S3 cycles."
+    },
+    {
+      "id": "hw.spurious_wakeup",
+      "status": "PASS",
+      "note": "RESOLVED 2026-09-14. LID0 is the wake source. With it disarmed (round 3) and with the maintainer's sleep hook moved into /usr/lib/systemd/system-sleep/ where systemd actually reads it (round 4), gpe6F did not fire at all - it had fired exactly once in every earlier suspend - and the 3-4 s wake stopped. The two rounds lasted 21.9 s and 24.4 s, which is consistent with the maintainer waking the machine by hand; the probe cannot tell that from a spurious wake, so the durations are NOT the evidence. The evidence is gpe6F falling silent. Not caused by this package: the channel-count fix behaves exactly as the build before it did."
+    },
+    {
+      "id": "tool.wake_probe",
+      "status": "PASS",
+      "note": "tools/macbook91-wake-probe: snapshots every GPE counter, every per-device power/wakeup_* counter, /proc/acpi/wakeup, pm_wakeup_irq and suspend_stats; detects resume from CLOCK_BOOTTIME minus CLOCK_MONOTONIC rather than from a log or a blanked screen; reports a suspend that never happened as NONE, never as success. Fixture-tested for the 4 s, 900 s and 0 s cases."
+    },
+    {
+      "id": "tool.acpi_wake_toggle_safe",
+      "status": "PASS",
+      "note": "macbook91-runner wake --disarm records the prior state of every name before touching it, toggles only the ones that differ (/proc/acpi/wakeup is a toggle, so an unconditional write to an already-disabled device ENABLES it), restores the exact prior state from the exit trap, verifies the restore and prints manual recovery if it fails."
+    },
+    {
+      "id": "hw.long_suspend_coverage",
+      "status": "PASS",
+      "note": "MEASURED 2026-09-15 and maintainer-confirmed. Five deep suspends that day, from the journal, not from a probe: 06:19:42->08:03:39 (1 h 44 min), 10:03:41->10:51:53 (48 min), 13:25:40->13:48:55 (23 min), 18:25:15->18:53:57 (29 min), 19:26:33->20:50:57 (1 h 24 min), each 'PM: suspend entry (deep)'. Every resume carries 'A1534: restored 128 coefficients, 19 pin configs, digi 0x111, converter 0x0a channel count 4'. The maintainer confirms sound after them. This supersedes the earlier concern that only seconds-long S3 had ever been seen. TWO LIMITS, both real: these ran under the channel-count fix of 2026-09-14, and the headphone fix of 2026-09-15 changed no driver source at all, so the cvt_chan_count restore under test is byte-identical; and the 20:50:57 resume did leave the machine silent - for the unrelated userspace reason the headphone fix addresses (rootcause.acp_port_jack_coupling), not because the codec restore failed. Its restore line is present like all the others."
+    },
+    {
+      "id": "tool.dsdt_prw_map",
+      "status": "PASS",
+      "note": "macbook91-wake-probe prw decodes the _PRW packages out of the DSDT's raw AML - NameOp, _PRW, PackageOp, PkgLength, element count, BytePrefix/ZeroOp/OneOp/WordPrefix - because iasl is not installed and the table is root-only. The encoding is verified against synthetic bytes by the test suite before it ever touches the real table. The device match is positional against /proc/acpi/wakeup, which is a heuristic, is offered only when the counts agree, and says so in its own output."
+    },
+    {
+      "id": "env.sleep_hook_never_ran",
+      "status": "PASS",
+      "note": "/etc/systemd/system-sleep/legacy-hook-sleep_hacks is executable and was installed to stop the lid waking the machine, and it has NEVER run: journalctl -t SLEEPHACK has no entries in any boot on record while /usr/bin/logger exists. systemd reads ONLY /usr/lib/systemd/system-sleep/ - that is the only such path in the systemd-sleep binary and the only one systemd-sleep(8) documents. Positive control: /var/log/sa/sa14 was written at 18:16:36, the exact second of a resume, by sysstat.sleep from /usr/lib. Fix: install the script into /usr/lib/systemd/system-sleep/ and remove the /etc copy - exactly one copy, because /proc/acpi/wakeup is a toggle and two scripts cancel out. FIXED by the maintainer: the script now lives in /usr/lib/systemd/system-sleep/ and the probe confirms runs=True."
+    },
+    {
+      "id": "tool.wake_probe_captures_hooks",
+      "status": "PASS",
+      "note": "MISS FIXED. The first investigation checked sleep.conf and logind.conf and never looked at the sleep-hook directories. macbook91-wake-probe now records both, flags a hook that rewrites /proc/acpi/wakeup in the directory systemd really reads (it would change the armed set between the snapshot and the suspend), and flags an executable in a directory systemd does not read as never running. Three tests, one of which re-checks the systemd-sleep binary rather than trusting the write-up."
+    },
+    {
+      "id": "hw.soft_mixer_no_hw_movement",
+      "status": "PASS",
+      "note": "MEASURED 2026-09-15 under the headphone-fix profile set, which adds a [Element Line Out] with volume = merge to the output path and could in principle have handed the desktop slider a hardware control. It did not: driving the sink volume to 0.10 and 0.90 left ALSA 'Line Out' at 127 and 'Master' at 102, unmoved. Attenuation stays digital and ahead of the codec, which is the requirement, because this speaker path has no hardware volume control and clipped badly when the hardware controls were used."
+    },
+    {
+      "id": "env.power_save_policy",
+      "status": "SKIPPED",
+      "note": "DECIDED 2026-10-14: the package ships no snd_hda_intel power_save policy. Reason and evidence in docs/HOST-POLICY.md section 1. No crackle noticed by the maintainer on battery (maintainer report, not a measurement); the battery-cost measurement was declined by the maintainer, so the cost of 0 stays NOT_RUN. Measured value in effect on the test machine: 1 on battery and also 1 on AC (2026-10-14 09:53), because TLP 1.10.2 (SOUND_POWER_SAVE_ON_AC default 1) rewrites what the cachyos-settings AC rule sets to 0; the writer order was not traced. The kernel default is 10 (CONFIG_SND_HDA_POWER_SAVE_DEFAULT=10); TLP sets 1 on battery as well (SOUND_POWER_SAVE_ON_BAT default 1; boot of 2026-10-14: TLP applied its settings at 08:57:22, two seconds after the card0 rule failed, and the value read on battery was 1). The udev 'exit code 1' messages (card0 on battery boots, ADP1 after udev change replays) are a cachyos-settings 1:1.4.1-1 defect fixed upstream in CachyOS-Settings c8e575bbd4 (2026-09-24), not yet packaged on 2026-10-14."
+    },
+    {
+      "id": "env.rtkit_user_session_priority",
+      "status": "PASS",
+      "note": "MEASURED 2026-10-14: with rtkit 0.14 installed and the user's pipewire, pipewire-pulse and wireplumber restarted at 2026-10-14 09:56:11, the data-loop threads keep SCHED_FIFO 88 / 83 / 83, as before rtkit (measured 2026-10-14 09:30), and no RTKit or mod.rt line appears at -p4. The user session uses RLIMIT_RTPRIO 99 from /etc/security/limits.d/20-audio.conf. Decision and evidence: docs/HOST-POLICY.md section 2."
+    },
+    {
+      "id": "env.rtkit_boot_messages",
+      "status": "PASS",
+      "note": "PASS, measured 2026-10-15 on the boot that started 2026-10-14 12:29:53, after rtkit was installed (2026-10-14 09:15): 'journalctl -b -p4' filtered for rtkit or realtimekit (docs/HOST-POLICY.md 2.4) counts 0 lines; the three boots whose greeter started before rtkit counted 21, 21 and 36 (read 2026-10-15). Before: needed the maintainer's next reboot (2026-10-14: no reboot without the maintainer, LUKS passphrase). Then 'journalctl -b -p4' must contain no RTKit/RealtimeKit line from the plasmalogin greeter's PipeWire/WirePlumber or from xdg-desktop-portal. See docs/HOST-POLICY.md 2.4."
+    }
+  ],
+  "overall": "PROMOTED (release/20261021.01; tag and publication follow separately) - 20261021.01 is the first public release: comments, attribution, licence headers and non-code files only, no driver behaviour change; source identity 7.2 3459bbf7be37223c (was 79b16c8b296a3821), 6.18 2fc8b8ad2d1b2deb (was 7fc96add428d9fce). Hardware: NOT RUN for 20261021.01, carried over from 20261020.03 (6.18) and 20261020.01 (7.2) on the module-identity evidence in hw.runtime_20261021_01_carried_over. Earlier releases: RELEASE (promoted, tag v20261020.03, published 2026-10-20: GitHub release, VERIFIED) - 20261020.03 adds the 6.18 LTS series. 6.18: macbook91-audio-verify PASS on hardware (2026-10-20, 6.18.55-2-cachyos-lts, module 20261020.03+7fc96add428d9fce, 31 passed / 0 failed / 2 skipped, listening and jack checks maintainer-confirmed); suspend/resume on 6.18 NOT VERIFIED (accepted by the maintainer on 2026-10-20, not tested; hw.suspend_resume_6_18_lts, no suspend in that boot); 7.2 source identity unchanged (79b16c8b296a3821), 7.2 runtime carried over from 20261020.01 (hw.runtime_7_2_20261020_03_carried_over). Promoted as 20261020.03 (package sha256 96a585623455500d62b0624bcfaa9a8c33b19c5e52e13706a22dcea4a7c9ad5b); the hardware run used the package built before the documentation-only re-pin (sha256 3fc2fe994ca304a82ad80f1e882790065bca458a0dedf727594a69dcb8bf6764), whose module source is identical; the published package has been installed since 2026-10-20 19:01-19:04 over that build (pkg.install_published_20261020_03, byte-identical to the release asset, loaded module equals on-disk module). RELEASE - 20261020.02 changes no driver code (source identity 79b16c8b296a3821 as in 20261020.01): the license change of 2026-10-20 (own files GPL-3.0-or-later; the module and what builds it stay GPL-2.0), the corrections of vendored/PROVENANCE.md and the English translation of the remaining German text. Installed on the test machine 2026-10-20 (pacman -U exit 0, DKMS built for 7.2.11-1-cachyos, on-disk module 20261020.02+79b16c8b296a3821) but NOT loaded: no reboot since the install, so no runtime check of the new modules was run. The runtime evidence is carried over from 20261020.01, whose module source is identical (macbook91-audio-verify 31 passed / 0 failed / 2 skipped on 20261020.01, maintainer-confirmed; macbook91-runner jackstream run 20261020T063948Z-5274 PASS). RELEASE - 20261020.01 fixes the capture defect of 2026-10-19 (a headphone plug stopped a running capture). Installed on the test machine 2026-10-20, loaded module = 20261020.01+79b16c8b296a3821; macbook91-runner jackstream run 20261020T063948Z-5274 PASS, macbook91-audio-verify run by the maintainer (counts not recorded; no failure archive written). RELEASE - 20261015.01 is a verifier and tools release from an audit of the tree, with no driver behaviour change (comments and two Makefile messages only; source identity 137052a20d23eae4). Installed on the test machine 2026-10-15 (macbook91-cs4208-dkms 20261015.01-1, DKMS-built for 7.2.9-2-cachyos, rebooted, loaded module = on-disk module 20261015.01+137052a20d23eae4); macbook91-audio-verify PASS as reported by the maintainer, counts not recorded (the verifier archives only on failure, and none was written). RELEASE - 20261006.01 is the first date-based version; it differs from the build before it only in PACKAGE_VERSION in dkms.conf. That build carries one driver change, the jack-callback fix of 2026-09-21, and it is verified on hardware: installed on the test machine (DKMS-built for 7.2.9-1-cachyos, loaded module = on-disk module, source identity 679b7fd96a54c7de), macbook91-audio-verify 27 passed / 0 failed / 2 skipped, macbook91-runner jackstream run 20261006T081744Z-3324 PASS. The rest of it is packaging: a reproducible, uncompressed source tarball whose SHA256 is pinned in packaging/arch/PKGBUILD, package() = make install. Every mandatory gate either passed on hardware or was explicitly outside the validated scope, until regress.concurrent_capture failed on 2026-10-19.",
+  "blocker": "No release blocker. The hardware run of 20261021.01 is NOT RUN (carried over, hw.runtime_20261021_01_carried_over; pkg.install_20261021_01). Not run on hardware: the runner's other privileged commands. Accepted by the maintainer on 2026-10-20 without a test run (not tested, so no longer open): a real call with a headset plugged in (hw.headset_call) and, for the 6.18 series, suspend/resume (hw.suspend_resume_6_18_lts), Bluetooth function and the wireless hang recovery by rebind in action. HDMI stays SKIPPED by the maintainer's decision; the optional amplifier bring-up stays off and unproven. The converter channel-count fix (fix.cvt_chan_count_programmed) was confirmed on hardware on 2026-09-14, the capture fix (fix.capture_resync_after_jack_replay) on 2026-10-20. For the 6.18 series, suspend/resume (hw.suspend_resume_6_18_lts), Bluetooth function and a headset call are NOT VERIFIED (accepted by the maintainer, not tested)."
+}

@@ -1,0 +1,104 @@
+#!/usr/bin/env python3
+# SPDX-License-Identifier: GPL-3.0-or-later
+"""Dump every readable CS4208 register to a diffable text file.
+
+Needs root (CAP_SYS_RAWIO for the HDA verb ioctl).
+
+Purpose: stop guessing which registers a deep sleep loses and enumerate the
+whole delta. Run once while the speakers work and once after a resume, then
+diff the two files. Every line is "nid register = value", sorted, so diff
+output is exactly the set of registers that changed.
+
+NOT read-only: reading the 128-entry vendor coefficient space requires
+selecting each coefficient first, so this issues 128 SET_COEF_INDEX writes
+(coefficient index selection on widget 0x24, never a data write) - the same
+selector every coefficient read on this codec needs, and not something that
+can perturb the state being measured. No other write is issued anywhere in
+this file.
+
+macbook91-codec-state (also in this directory) is the capability-gated
+successor for new work: it derives its register map from each widget's own
+advertised capabilities instead of a hardcoded list, and its docstring states
+its own read/write contract precisely. Reach for that one unless you
+specifically need this tool's plain diffable text output.
+
+  sudo macbook91-codec-dump /tmp/codec-working.txt
+  # suspend, resume
+  sudo macbook91-codec-dump /tmp/codec-resumed.txt
+  diff -u /tmp/codec-working.txt /tmp/codec-resumed.txt
+"""
+import fcntl, struct, sys
+
+HWDEP = '/dev/snd/hwC0D0'
+IOCTL = 0xC0084811
+VENDOR_NID = 0x24
+
+fd = open(HWDEP, 'rb+', buffering=0)
+
+def verb(nid, v, p):
+    try:
+        out = fcntl.ioctl(fd, IOCTL,
+                          struct.pack('II', ((nid & 0xff) << 24) | ((v & 0xffff) << 8) | (p & 0xff), 0))
+        return struct.unpack('II', out)[1]
+    except OSError:
+        return None
+
+# (verb, param, label) - all GET verbs, nothing that writes
+PARAMS = [(0x09, 'wcaps'), (0x0a, 'pcm'), (0x0b, 'stream_formats'), (0x0c, 'pincap'),
+          (0x0d, 'amp_in_caps'), (0x12, 'amp_out_caps'), (0x0e, 'conn_len'),
+          (0x0f, 'power_states'), (0x10, 'proc_caps'), (0x11, 'gpio_count')]
+GETS = [(0xf09, 'pin_sense_now'), (0xf01, 'connect_sel'), (0xf03, 'proc_state'), (0xf05, 'power'),
+        (0xf06, 'stream_chan'), (0xf07, 'pin_ctl'), (0xf08, 'unsol'),
+        (0xf09, 'pin_sense'), (0xf0c, 'eapd_btl'), (0xf0d, 'digi_convert'),
+        (0xf0f, 'volume_knob'), (0xf1c, 'config_default'),
+        (0xa00, 'stream_format'), (0xff0, 'vendor_7f0'), (0xff1, 'vendor_7f1')]
+AFG_GETS = [(0xf15, 'gpio_data'), (0xf16, 'gpio_mask'), (0xf17, 'gpio_dir'),
+            (0xf18, 'gpio_wake'), (0xf19, 'gpio_unsol'), (0xf1a, 'gpio_sticky')]
+
+out = []
+vid = verb(0x00, 0xf00, 0x00)
+out.append(f"codec vendor_id = {vid:#010x}")
+out.append(f"codec subsystem = {verb(0x00, 0xf00, 0x20):#010x}")
+
+for nid in range(0x01, 0x26):
+    wcaps = verb(nid, 0xf00, 0x09)
+    if wcaps is None:
+        continue
+    for p, label in PARAMS:
+        v = verb(nid, 0xf00, p)
+        if v is not None:
+            out.append(f"{nid:#04x} param.{label:<16} = {v:#010x}")
+    for vb, label in GETS:
+        v = verb(nid, vb, 0)
+        if v is not None:
+            out.append(f"{nid:#04x} get.{label:<18} = {v:#010x}")
+    # amplifier gains. GET_AMP_GAIN_MUTE takes a 16-bit parameter, which the
+    # hwdep ioctl truncates to 8 bits, so the direction/channel selector goes
+    # in the verb field: verb = 0xb00 | (selector >> 8), param = index.
+    # AC_AMP_GET_OUTPUT = 1<<15, AC_AMP_GET_LEFT = 1<<13, right/input = 0.
+    for sel, sname in ((0xa000, 'out.L'), (0x8000, 'out.R'),
+                       (0x2000, 'in.L'),  (0x0000, 'in.R')):
+        v = verb(nid, 0xb00 | (sel >> 8), 0)
+        if v is not None:
+            out.append(f"{nid:#04x} amp.{sname:<18} = {v:#010x}")
+
+# AFG-wide GPIO block
+for vb, label in AFG_GETS:
+    v = verb(0x01, vb, 0)
+    if v is not None:
+        out.append(f"0x01 gpio.{label:<17} = {v:#010x}")
+
+# the full vendor coefficient space
+for i in range(128):
+    verb(VENDOR_NID, 0x500, i)
+    v = verb(VENDOR_NID, 0x0c00, 0)
+    out.append(f"{VENDOR_NID:#04x} coef[{i:#04x}]{'':<10} = {v & 0xffff:#06x}")
+
+text = "\n".join(out) + "\n"
+if len(sys.argv) > 1:
+    open(sys.argv[1], 'w').write(text)
+    changed = "INTACT (speakers should work)" if verb(0x1d, 0xf1c, 0) == 0x90100110 else "LOST (post-suspend)"
+    print(f"wrote {sys.argv[1]}  ({len(out)} registers)")
+    print(f"pin 0x1d says: {changed}")
+else:
+    sys.stdout.write(text)

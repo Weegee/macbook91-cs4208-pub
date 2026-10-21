@@ -1,0 +1,174 @@
+#!/usr/bin/env bash
+# SPDX-License-Identifier: GPL-3.0-or-later
+#
+# SUPERSEDED — use macbook91-runner probe. This tool's two questions were
+# answered and retired hw.speaker_rate_44100 and hw.speaker_channel_map.
+# Kept as evidence of what was run; nothing new should be added here.
+#
+# macbook91-speaker-probe — identify why the internal speakers distort, and
+# which TDM slot drives which speaker.
+#
+# Two questions, in order:
+#
+#   1. SAMPLE RATE. The macOS bring-up programs converter 0x0a with format
+#      0x4013 = 44.1 kHz. The codec also advertises 48 kHz, but the four
+#      TAS5758L amplifiers are clocked from the codec (AppleHDA: SRMultiple 64)
+#      and may only be correct at one rate. PipeWire normally runs at 48 kHz.
+#
+#   2. SLOT MAPPING. An earlier probe played identical samples in all four
+#      channels, which sounds clean even if the slots are misaligned - it
+#      cannot detect the problem. Playing one slot at a time can.
+#
+# Safety: every tone is 440 Hz at 12% of full scale with a 50 ms fade at each
+# end. Nothing is reconfigured; this only opens the PCM and writes samples.
+#
+set -u
+
+CARD=0
+DEV="hw:${CARD},0"
+CHANNELS=4
+SECS=2
+AMPLITUDE=0.12
+
+have() { command -v "$1" >/dev/null 2>&1; }
+for t in aplay python3 amixer; do
+	have "$t" || { printf 'missing required tool: %s\n' "$t" >&2; exit 2; }
+done
+
+jack_state() {
+	amixer -c "$CARD" cget numid=12 2>/dev/null | sed -n 's/^ *: values=//p' | head -1
+}
+
+# gen_tone RATE SLOT : 4-channel S16_LE tone. SLOT -1 means all channels.
+gen_tone() {
+	python3 - "$1" "$2" "$CHANNELS" "$SECS" "$AMPLITUDE" <<'PY'
+import math, struct, sys
+rate, slot, ch, secs, amp = int(sys.argv[1]), int(sys.argv[2]), int(sys.argv[3]), float(sys.argv[4]), float(sys.argv[5])
+n = int(rate * secs)
+out = bytearray()
+for i in range(n):
+    env = min(1.0, i / (rate * 0.05), (n - i) / (rate * 0.05))
+    v = int(amp * env * 32767 * math.sin(2 * math.pi * 440 * i / rate))
+    frame = [v] * ch if slot < 0 else [v if c == slot else 0 for c in range(ch)]
+    out += struct.pack('<' + 'h' * ch, *frame)
+sys.stdout.buffer.write(bytes(out))
+PY
+}
+
+play() { # play RATE SLOT
+	local rate="$1" slot="$2" err rc
+	err=$(gen_tone "$rate" "$slot" \
+		| aplay -q -D "$DEV" -f S16_LE -r "$rate" -c "$CHANNELS" 2>&1 >/dev/null)
+	rc=$?
+	# Success is the EXIT STATUS. aplay always prints a banner to stderr.
+	[ "$rc" -eq 0 ] && return 0
+	printf '    could not play (aplay exit %s): %s\n' "$rc" "${err:-no message}"
+	return 1
+}
+
+ask() {
+	local reply
+	while true; do
+		printf '    %s [y/n] ' "$1"
+		read -r reply || return 2
+		case "$reply" in [yYjJ]*) return 0 ;; [nN]*) return 1 ;; esac
+	done
+}
+
+wait_free() {
+	local i err
+	for i in $(seq 1 15); do
+		err=$(aplay -q -D "$DEV" -f S16_LE -r 44100 -c "$CHANNELS" -d 1 /dev/zero 2>&1 >/dev/null) && return 0
+		case "$err" in
+			*[Bb]usy*|*belegt*) printf '  waiting for the audio server to release %s (%s/15)\n' "$DEV" "$i"; sleep 1 ;;
+			*) printf '  cannot open %s: %s\n' "$DEV" "$err"; return 1 ;;
+		esac
+	done
+	printf '  %s stayed busy. Pause anything playing audio and retry.\n' "$DEV"
+	return 1
+}
+
+printf '\nMacBook9,1 speaker probe\n\n'
+printf '  All tones: 440 Hz, 12%% of full scale, %ss, faded in and out.\n' "$SECS"
+printf '  Nothing is reconfigured.\n\n'
+
+if [ "$(jack_state)" = on ]; then
+	printf '  Headphones are plugged in; the speakers are muted by design.\n'
+	ask "Unplugged now?" || exit 1
+	[ "$(jack_state)" = on ] && { printf '  Jack still reads "on". Stopping.\n'; exit 1; }
+fi
+
+ask "Ready?" || exit 1
+wait_free || exit 1
+
+# --- part 1: sample rate ----------------------------------------------------
+
+printf '\n  Part 1 of 2 — sample rate\n'
+printf '  The same tone twice. Listen for distortion, not loudness.\n'
+
+R441=unknown
+R480=unknown
+
+printf '\n  [44100 Hz]\n'
+if play 44100 -1; then
+	if ask "Was the 44100 Hz tone CLEAN (no distortion)?"; then R441=clean; else R441=distorted; fi
+else
+	R441=failed
+fi
+
+printf '\n  [48000 Hz]\n'
+if play 48000 -1; then
+	if ask "Was the 48000 Hz tone CLEAN (no distortion)?"; then R480=clean; else R480=distorted; fi
+else
+	R480=failed
+fi
+
+GOOD_RATE=44100
+[ "$R441" = clean ] || { [ "$R480" = clean ] && GOOD_RATE=48000; }
+
+# --- part 2: slot mapping ---------------------------------------------------
+
+printf '\n  Part 2 of 2 — which slot drives which speaker\n'
+printf '  One TDM slot at a time at %s Hz. For each, say where you heard it.\n' "$GOOD_RATE"
+printf '  This is what an all-channels tone cannot reveal: identical samples in\n'
+printf '  every channel sound fine even when the slots are misaligned.\n'
+
+SLOTMAP=""
+for slot in 0 1 2 3; do
+	printf '\n  [slot %s]\n' "$slot"
+	if ! play "$GOOD_RATE" "$slot"; then
+		SLOTMAP="$SLOTMAP\n    slot $slot: could not play"
+		continue
+	fi
+	printf '    Where did you hear it?\n'
+	printf '      l = left   r = right   b = both   n = nothing   d = heard but distorted\n'
+	printf '    > '
+	read -r where || where=n
+	case "$where" in
+		l*) SLOTMAP="$SLOTMAP\n    slot $slot: LEFT" ;;
+		r*) SLOTMAP="$SLOTMAP\n    slot $slot: RIGHT" ;;
+		b*) SLOTMAP="$SLOTMAP\n    slot $slot: BOTH" ;;
+		d*) SLOTMAP="$SLOTMAP\n    slot $slot: heard, DISTORTED" ;;
+		*)  SLOTMAP="$SLOTMAP\n    slot $slot: silent" ;;
+	esac
+done
+
+# --- result -----------------------------------------------------------------
+
+printf '\n  Result\n'
+printf '    44100 Hz: %s\n' "$R441"
+printf '    48000 Hz: %s\n' "$R480"
+printf '    slot map:%b\n' "$SLOTMAP"
+printf '\n'
+
+if [ "$R441" = clean ] && [ "$R480" = distorted ]; then
+	printf '  => The path is only correct at 44.1 kHz. The driver must restrict\n'
+	printf '     the speaker PCM to 44100 Hz so PipeWire stops running it at 48 kHz.\n'
+elif [ "$R441" = distorted ] && [ "$R480" = distorted ]; then
+	printf '  => Distorted at both rates, so the rate is not the cause. The slot\n'
+	printf '     map above is then the thing to act on.\n'
+elif [ "$R441" = clean ] && [ "$R480" = clean ]; then
+	printf '  => Both rates are clean on their own, so the distortion comes from\n'
+	printf '     what PipeWire sends, not from the rate. The slot map decides.\n'
+fi
+printf '\n  Please paste this whole result back.\n\n'

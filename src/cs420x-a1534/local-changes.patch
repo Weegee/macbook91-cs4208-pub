@@ -1,0 +1,334 @@
+--- upstream/cs420x.c	2026-09-14 07:12:16.266326260 +0200
++++ cs420x.c	2026-09-14 21:17:59.341044871 +0200
+@@ -15,7 +15,63 @@
+ #include "hda_local.h"
+ #include "hda_auto_parser.h"
+ #include "hda_jack.h"
+-#include "../generic.h"
++#include "generic.h"
++
++/* --- MacBook9,1 (A1534) additions: begin --- */
++#include <linux/delay.h>
++#include <linux/dmi.h>
++#include <linux/mutex.h>
++#include <linux/string.h>
++#include "a1534_match.h"
++
++/* Per-codec A1534 live-stream state; the implementation is in a1534_pcm.h,
++ * which is included further down because it needs struct cs_spec. */
++struct a1534_state {
++	struct mutex lock;
++	unsigned int stream_tag;
++	unsigned int format;
++	int hp;
++	/* Cleared whenever the codec is suspended, set once the bring-up
++	 * sequence has run. Deep sleep resets the codec and loses the whole
++	 * A1534 configuration, so the resume path keys off this rather than
++	 * off PM event codes. */
++	unsigned int bringup_valid:1;
++	/* Set once the "configuration lost across suspend" warning has been
++	 * emitted, so a resume does not repeat it on every runtime wake. */
++	unsigned int config_lost_reported:1;
++};
++
++/* Vendor widget 0x24 reports "Processing caps: benign=0, ncoeff=128". */
++#define A1534_NCOEF		128
++
++/* Pin complexes on this codec, from the live widget dump. */
++#define A1534_PIN_FIRST		0x10
++#define A1534_PIN_LAST		0x22
++#define A1534_NPIN		(A1534_PIN_LAST - A1534_PIN_FIRST + 1)
++
++/* The firmware-established codec state that Linux does not manage. Captured
++ * at probe when it is still intact, written back after a deep sleep has
++ * destroyed it. The implementation is in a1534_snapshot.h, included further
++ * down because it needs struct cs_spec. */
++struct a1534_snapshot {
++	unsigned int valid:1;
++	unsigned int coef[A1534_NCOEF];
++	unsigned int pincfg[A1534_NPIN];
++	unsigned int digi;
++	/*
++	 * Converter 0x0a's channel count, which is a register of its own and
++	 * not part of the stream format. Firmware programs it to 4 at
++	 * power-on; a suspend resets it to 1 and nothing in Linux puts it
++	 * back. See a1534_pcm.h, a1534_set_chan_count().
++	 */
++	unsigned int cvt_chan_count;
++	unsigned int proc_state;
++	/* vendor-private verbs Apple restores after a power-rail loss */
++	unsigned int unsol;
++	unsigned int vp0;
++	unsigned int vp1;
++};
++/* --- MacBook9,1 (A1534) additions: end --- */
+ 
+ struct cs_spec {
+ 	struct hda_gen_spec gen;
+@@ -31,6 +87,16 @@
+ 	/* for MBP SPDIF control */
+ 	int (*spdif_sw_put)(struct snd_kcontrol *kcontrol,
+ 			    struct snd_ctl_elem_value *ucontrol);
++
++	/* --- MacBook9,1 (A1534) additions: begin ---
++	 * Set once, in cs4208_probe(), only when a1534_match() accepts this
++	 * machine. Every A1534-specific branch keys off this per-codec flag,
++	 * so any other codec follows the unmodified mainline path.
++	 */
++	unsigned int is_a1534:1;
++	struct a1534_state a1534;
++	struct a1534_snapshot a1534_snap;
++	/* --- MacBook9,1 (A1534) additions: end --- */
+ };
+ 
+ /* available models with CS420x */
+@@ -663,6 +729,17 @@
+ 	}
+ }
+ 
++/* --- MacBook9,1 (A1534) additions: begin ---
++ * Included here because both need cs_spec and cs_init(). The bring-up
++ * sequence is vendored evidence, not authored code: see
++ * vendored/PROVENANCE.md before changing a single verb in it.
++ */
++#include "vendored/a1534_sequence.h"
++#include "a1534_i2c.h"
++#include "a1534_snapshot.h"
++#include "a1534_pcm.h"
++/* --- MacBook9,1 (A1534) additions: end --- */
++
+ static const struct hda_fixup cs4208_fixups[] = {
+ 	[CS4208_MBA6] = {
+ 		.type = HDA_FIXUP_PINS,
+@@ -703,6 +780,32 @@
+ 	snd_hda_override_amp_caps(codec, adc, HDA_INPUT, caps);
+ }
+ 
++/* --- MacBook9,1 (A1534) additions: begin --- */
++
++static int a1534_streq(const char *a, const char *b)
++{
++	return strcmp(a, b) == 0;
++}
++
++/*
++ * Decide whether this codec is the CS4208 of a MacBook9,1.
++ *
++ * The decision lives in a1534_match.h so the host-side regression tests in
++ * tests/ exercise exactly this logic. Requiring the DMI identity in
++ * addition to the codec SSID is deliberate: a bare Apple vendor match reaches
++ * this codec through snd_hda_pick_fixup()'s codec-SSID fallback even though
++ * the PCI subsystem is Intel's 8086:7270. See docs/ROOT-CAUSE.md §3.
++ */
++static bool cs4208_is_a1534(struct hda_codec *codec)
++{
++	return a1534_match(codec->core.subsystem_id,
++			   dmi_get_system_info(DMI_SYS_VENDOR),
++			   dmi_get_system_info(DMI_PRODUCT_NAME),
++			   a1534_streq) == 1;
++}
++
++/* --- MacBook9,1 (A1534) additions: end --- */
++
+ static int cs4208_probe(struct hda_codec *codec)
+ {
+ 	struct cs_spec *spec = codec->spec;
+@@ -711,10 +814,96 @@
+ 	/* exclude NID 0x10 (HP) from output volumes due to different steps */
+ 	spec->gen.out_vol_mask = 1ULL << 0x10;
+ 
++	/* --- MacBook9,1 (A1534) additions: begin --- */
++	spec->is_a1534 = cs4208_is_a1534(codec);
++	if (!spec->is_a1534)
++		/*
++		 * Say so. When the gate silently declined, the driver fell back
++		 * to the generic 2-channel path and every four-channel playback
++		 * failed with "channel count not supported" - which read as
++		 * silence and cost an entire debugging session. A declined gate
++		 * must never be invisible.
++		 */
++		codec_info(codec,
++			   "CS4208: not the A1534 path (codec SSID %04x:%04x, DMI %s / %s)\n",
++			   codec->core.subsystem_id >> 16,
++			   codec->core.subsystem_id & 0xffff,
++			   dmi_get_system_info(DMI_SYS_VENDOR) ?: "?",
++			   dmi_get_system_info(DMI_PRODUCT_NAME) ?: "?");
++	if (spec->is_a1534) {
++		codec_info(codec,
++			   "CS4208: MacBook9,1 (A1534) detected, codec SSID %04x:%04x\n",
++			   codec->core.subsystem_id >> 16,
++			   codec->core.subsystem_id & 0xffff);
++
++		mutex_init(&spec->a1534.lock);
++		spec->a1534.hp = -1;
++
++		/* Capture the firmware state before setup_a1534() issues
++		 * anything, but only when it is still intact. Pin 0x1d's
++		 * configuration default is the marker: 0x90100110 means the
++		 * firmware programming from power-on is still in place, and
++		 * 0x901600f0 means a deep sleep has already reset the codec.
++		 * Snapshotting the reset state would be worse than useless -
++		 * it would let the resume path "restore" nothing. */
++		if (a1534_pin1d_cfg(codec) == A1534_PIN1D_CFG_BRINGUP) {
++			a1534_snapshot_take(codec, &spec->a1534_snap);
++			a1534_snapshot_log(codec, &spec->a1534_snap);
++		} else {
++			codec_info(codec,
++				   "A1534: firmware state already lost at probe; no snapshot taken\n");
++		}
++
++		/* Unlike the bundled snapshot, these returns are checked. A
++		 * failed bring-up falls back to plain mainline behaviour
++		 * rather than pretending to have succeeded. */
++		err = setup_a1534(codec);
++		if (err < 0) {
++			codec_warn(codec, "A1534: bring-up failed (%d), using generic path\n", err);
++			spec->is_a1534 = 0;
++		} else {
++			err = play_a1534(codec);
++			if (err < 0) {
++				codec_warn(codec, "A1534: speaker enable failed (%d), using generic path\n", err);
++				spec->is_a1534 = 0;
++			} else {
++				spec->a1534.bringup_valid = 1;
++			}
++		}
++
++	}
++	/* --- MacBook9,1 (A1534) additions: end --- */
++
+ 	snd_hda_pick_fixup(codec, cs4208_models, cs4208_fixup_tbl,
+ 			   cs4208_fixups);
+ 	snd_hda_apply_fixup(codec, HDA_FIXUP_ACT_PRE_PROBE);
+ 
++	/* --- MacBook9,1 (A1534) additions: begin ---
++	 * Reconcile the two GPIO regimes. cs4208_fixup_gpio0() has just set
++	 *
++	 *     spec->gpio_mask = spec->gpio_dir = gpio_eapd_speaker = 1
++	 *
++	 * and cs_init() writes that mask verbatim. Writing GPIO_MASK = 0x01
++	 * DISABLES GPIO 1-5, including GPIO 4 and 5 - the DFET supply controls
++	 * for the four TAS5758L speaker amplifiers (AppleHDA layouts
++	 * 121/127/129, docs/HARDWARE-PATH.md §3). The bring-up sequence ends
++	 * with mask 0x37 / dir 0x31 / data 0x01 precisely to hold those FETs
++	 * on, so letting the mainline fixup narrow the mask switches the
++	 * speaker amplifiers off again a moment later. That is what made
++	 * the first test build silent.
++	 *
++	 * Adopt the bring-up's mask and direction, and keep bit 0 as the EAPD
++	 * bit that cs_automute() continues to toggle. Going through the spec
++	 * fields rather than raw verbs means snd_hda_codec_set_gpio() caches
++	 * the state and replays it on resume.
++	 */
++	if (spec->is_a1534) {
++		spec->gpio_mask = A1534_GPIO_MASK;
++		spec->gpio_dir  = A1534_GPIO_DIR;
++		spec->gpio_data = A1534_GPIO_DATA_SPEAKER;
++	}
++	/* --- MacBook9,1 (A1534) additions: end --- */
++
+ 	snd_hda_override_wcaps(codec, 0x18,
+ 			       get_wcaps(codec, 0x18) | AC_WCAP_STEREO);
+ 	cs4208_fix_amp_caps(codec, 0x18);
+@@ -750,14 +939,80 @@
+ 	return err;
+ }
+ 
++/* --- MacBook9,1 (A1534) additions: begin ---
++ *
++ * A1534 behaviour is reached by branching inside this single, static ops
++ * table on the per-codec spec->is_a1534 flag.
++ *
++ * The bundled snapshot instead assigned hda_codec_to_driver(codec)->ops from
++ * probe (docs/AUDIT-BUNDLED-DRIVER.md F2). That pointer resolves to the
++ * module-global cs420x_driver, so it replaced the ops of every codec bound to
++ * the module and broke re-probe. Dispatching here keeps the table const and
++ * shared while the behaviour stays strictly per codec.
++ */
++static int cs_build_pcms(struct hda_codec *codec)
++{
++	struct cs_spec *spec = codec->spec;
++
++	if (spec->is_a1534)
++		return a1534_build_pcms(codec);
++	return snd_hda_gen_build_pcms(codec);
++}
++
++static int cs_init_dispatch(struct hda_codec *codec)
++{
++	struct cs_spec *spec = codec->spec;
++
++	if (spec->is_a1534)
++		return a1534_init(codec);
++	return cs_init(codec);
++}
++
++/* Mirrors the core's own default for the non-A1534 case: when ops->resume is
++ * NULL the core does snd_hda_codec_init() + snd_hda_regmap_sync().
++ *
++ * snd_hda_codec_init() does nothing besides ops->init() - it calls
++ * driver->ops->init(codec) if set and otherwise returns 0
++ * (sound/hda/common/hda_local.h:656-663, linux 7.2.4). a1534_resume() calls
++ * a1534_init(), the ops->init equivalent,
++ * directly, so skipping snd_hda_codec_init() here skips nothing - deliberate,
++ * not an asymmetry.
++ */
++/* Mark the A1534 configuration as lost. The core calls this before putting the
++ * codec into D3, and everything it does afterwards is unchanged - ops->suspend
++ * is additive, not a replacement. */
++static int cs_suspend(struct hda_codec *codec)
++{
++	struct cs_spec *spec = codec->spec;
++
++	if (spec->is_a1534)
++		spec->a1534.bringup_valid = 0;
++	return 0;
++}
++
++static int cs_resume(struct hda_codec *codec)
++{
++	struct cs_spec *spec = codec->spec;
++
++	if (spec->is_a1534)
++		return a1534_resume(codec);
++
++	snd_hda_codec_init(codec);
++	snd_hda_regmap_sync(codec);
++	return 0;
++}
++/* --- MacBook9,1 (A1534) additions: end --- */
++
+ static const struct hda_codec_ops cs_codec_ops = {
+ 	.probe = cs_codec_probe,
+ 	.remove = snd_hda_gen_remove,
+ 	.build_controls = cs_build_controls,
+-	.build_pcms = snd_hda_gen_build_pcms,
+-	.init = cs_init,
++	.build_pcms = cs_build_pcms,
++	.init = cs_init_dispatch,
+ 	.unsol_event = snd_hda_jack_unsol_event,
+ 	.stream_pm = snd_hda_gen_stream_pm,
++	.suspend = cs_suspend,
++	.resume = cs_resume,
+ };
+ 
+ /*
+@@ -774,6 +1029,18 @@
+ MODULE_LICENSE("GPL");
+ MODULE_DESCRIPTION("Cirrus Logic CS420x HD-audio codec");
+ 
++/* --- MacBook9,1 (A1534) additions: begin ---
++ * A1534_SRCID is a hash of this file plus a1534_pcm.h, a1534_match.h and
++ * the vendored bring-up sequence, prefixed with the package version. The
++ * verifier reads it from /sys/module/snd_hda_codec_cs420x/version, which
++ * describes the module that is actually LOADED - unlike modinfo, which
++ * describes whatever file is on disk right now.
++ */
++#ifdef A1534_SRCID
++MODULE_VERSION(A1534_SRCID);
++#endif
++/* --- MacBook9,1 (A1534) additions: end --- */
++
+ static struct hda_codec_driver cs420x_driver = {
+ 	.id = snd_hda_id_cs420x,
+ 	.ops = &cs_codec_ops,

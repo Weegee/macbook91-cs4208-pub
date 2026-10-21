@@ -1,0 +1,513 @@
+#!/usr/bin/env python3
+# SPDX-License-Identifier: GPL-3.0-or-later
+"""Is the CS4208's I2C transport actually working? A self-validating probe.
+
+This answers ONE question, and it answers it in the state where the answer is
+already known independently: with the internal speakers working.
+
+    If an I2C read transaction cannot tell an address where an amplifier lives
+    from an address where nothing lives, then the transport is not measuring
+    anything, and every conclusion ever drawn from it is void.
+
+Every previous amplifier probe in this project read 0x0000 from all four
+amplifier addresses AND from a control address - including while the speakers
+were playing. That is the signature of a broken read path, not of absent
+hardware, and it was read the other way round. This probe is built to tell the
+two apart and to say which one it saw.
+
+WHAT IT WRITES
+
+  - coefficient 0x00 bit 3 on widget 0x24 (the I2C bridge enable), restored
+    byte-exact at the end to the value found at entry
+  - coefficients 0x14 (address), 0x15 (data), 0x16 (control) - the I2C engine's
+    own command registers
+
+It never writes an amplifier register. An I2C *read* transaction sends the
+register NUMBER to the amplifier and then reads; it does not send a value. No
+gain, limiter or protection bit is touched, and no audio is played.
+
+Needs CAP_SYS_RAWIO for the HDA verb ioctl, i.e. root.
+
+Usage:  macbook91-amp-transport [--json FILE] [--card 0]
+Exit:   0 measurement completed (see the verdict, which may be FAIL)
+        2 could not measure at all (no device, no permission, wrong codec)
+"""
+
+import argparse
+import fcntl
+import json
+import os
+import struct
+import sys
+import time
+
+HDA_IOCTL_VERB_WRITE = 0xC0084811
+
+VENDOR_NID = 0x24
+ROOT_NID = 0x00
+AFG_NID = 0x01
+
+# HDA parameters. The vendor id lives on the ROOT node 0x00, not on the audio
+# function group - reading it from the AFG returns 0, which is exactly how the
+# first run of this probe talked itself into "vendor id 00000000 is not the
+# CS4208" on a machine whose /proc entry said CS4208 two lines earlier.
+AC_PAR_VENDOR_ID = 0x00
+AC_PAR_SUBSYSTEM_ID = 0x01
+AC_PAR_REV_ID = 0x02
+AC_PAR_NODE_COUNT = 0x04
+AC_PAR_FUNCTION_TYPE = 0x05
+SPEAKER_PIN = 0x1D
+
+SET_COEF_INDEX = 0x500
+GET_PROC_COEF = 0xC00
+SET_PROC_COEF = 0x400
+GET_COEF_INDEX = 0xD00
+GET_CONFIG_DEFAULT = 0xF1C
+GET_GPIO_DATA = 0xF15
+GET_GPIO_MASK = 0xF16
+GET_GPIO_DIRECTION = 0xF17
+GET_POWER_STATE = 0xF05
+GET_PROC_STATE = 0xF03
+GET_SUBSYSTEM_ID = 0xF20
+PARAMETERS = 0xF00
+
+C_ENABLE, C_ADDR, C_DATA, C_CTRL, C_STATUS = 0x00, 0x14, 0x15, 0x16, 0x17
+BRIDGE_BIT = 0x08
+CTRL_START, CTRL_STOP = 0x04, 0x02
+
+AMPS = [(0x6C, 0), (0x6D, 1), (0x6E, 0), (0x6F, 1)]
+# Addresses with nothing on them. Three, not one: a single control cannot tell
+# "every address answers the same" from "this particular address happens to
+# match". 0x20-0x27 and 0x50-0x57 are common EEPROM/sensor ranges and are read
+# only; 0x7e is in the reserved 10-bit-addressing block.
+CONTROLS = [0x20, 0x50, 0x7E]
+# The registers Apple's bring-up writes, so a working transport should see
+# these values back on a machine the firmware has set up.
+AMP_REGS = [0x01, 0x02, 0x03, 0x04, 0x06, 0x08, 0x10, 0x11]
+EXPECTED = {0x01: 0xFD, 0x02: 0xC4, 0x03: 0x80, 0x04: 0xCF,
+            0x06: 0x55, 0x08: 0x10, 0x10: 0xFF, 0x11: 0xFC}
+
+
+class Codec:
+    def __init__(self, card=0):
+        self.path = '/dev/snd/hwC%dD0' % card
+        self.fd = open(self.path, 'rb+', buffering=0)
+        self.verbs = 0
+
+    def verb(self, nid, v, p):
+        """One raw HDA verb. `v` is the 12-bit verb, `p` the 8-bit parameter."""
+        self.verbs += 1
+        cmd = ((nid & 0xFF) << 24) | ((v & 0xFFFF) << 8) | (p & 0xFF)
+        out = fcntl.ioctl(self.fd, HDA_IOCTL_VERB_WRITE, struct.pack('II', cmd, 0))
+        return struct.unpack('II', out)[1]
+
+    def cget(self, idx):
+        self.verb(VENDOR_NID, SET_COEF_INDEX, idx)
+        return self.verb(VENDOR_NID, GET_PROC_COEF, 0) & 0xFFFF
+
+    def cset(self, idx, val):
+        self.verb(VENDOR_NID, SET_COEF_INDEX, idx)
+        # 4-bit verb 0x4 with a 16-bit payload: the kernel composes
+        # (verb << 8) | parm, so the high byte of the value rides in the verb.
+        self.verb(VENDOR_NID, SET_PROC_COEF | ((val >> 8) & 0xFF), val & 0xFF)
+
+    def engine(self):
+        """The five I2C engine registers, as one snapshot."""
+        return {'%02x' % i: self.cget(i)
+                for i in (C_ENABLE, C_ADDR, C_DATA, C_CTRL, C_STATUS)}
+
+
+def i2c_read(c, addr, reg, settle=0.0, trace=None):
+    """One I2C read transaction, in Apple's exact order (i2cRead @ 0x9c2f1e).
+
+    Including the closing STOP, which the kernel driver's a1534_i2c_read()
+    omits and which is the one transcription defect found in the static audit.
+    """
+    def step(name, fn):
+        fn()
+        if settle:
+            time.sleep(settle)
+        if trace is not None:
+            trace.append({'step': name, 'engine': c.engine()})
+
+    step('addr=%#04x<<1' % addr, lambda: c.cset(C_ADDR, addr << 1))
+    step('ctrl=START', lambda: c.cset(C_CTRL, CTRL_START))
+    step('status', lambda: c.cget(C_STATUS))
+    step('data=reg %#04x' % reg, lambda: c.cset(C_DATA, reg))
+    step('status', lambda: c.cget(C_STATUS))
+    step('addr=read', lambda: c.cset(C_ADDR, (addr << 1) | 1))
+    step('ctrl=START (restart)', lambda: c.cset(C_CTRL, CTRL_START))
+    step('status', lambda: c.cget(C_STATUS))
+    val = c.cget(C_DATA)
+    if trace is not None:
+        trace.append({'step': 'read data', 'value': val, 'engine': c.engine()})
+    step('status', lambda: c.cget(C_STATUS))
+    step('ctrl=STOP', lambda: c.cset(C_CTRL, CTRL_STOP))
+    step('status', lambda: c.cget(C_STATUS))
+    return val & 0xFFFF
+
+
+def sweep(c, settle=0.0):
+    out = {}
+    for addr in [a for a, _ in AMPS] + CONTROLS:
+        out['%02x' % addr] = {'%02x' % r: i2c_read(c, addr, r, settle)
+                              for r in AMP_REGS}
+    return out
+
+
+def identical(sweep_result):
+    """True when every address answered with exactly the same register map."""
+    vals = list(sweep_result.values())
+    return all(v == vals[0] for v in vals[1:])
+
+
+def main():
+    ap = argparse.ArgumentParser()
+    ap.add_argument('--json')
+    ap.add_argument('--card', type=int, default=0)
+    args = ap.parse_args()
+
+    r = {'tool': 'macbook91-amp-transport', 'version': '1',
+         'utc': time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime()),
+         'monotonic_start': time.monotonic(),
+         'tests': {}, 'notes': []}
+
+    def record(name, status, detail):
+        r['tests'][name] = {'status': status, 'detail': detail}
+        print('%-34s %-8s %s' % (name, status, detail))
+
+    try:
+        c = Codec(args.card)
+    except PermissionError:
+        print('BLOCKED: /dev/snd/hwC%dD0 needs CAP_SYS_RAWIO (run as root)' % args.card,
+              file=sys.stderr)
+        return 2
+    except FileNotFoundError:
+        print('BLOCKED: no hwdep device for card %d' % args.card, file=sys.stderr)
+        return 2
+
+    # --- capture the state BEFORE deciding anything ----------------------
+    # Evidence first, verdict second. The previous version returned at the
+    # identity gate, so a run that blocked recorded nothing at all - and the
+    # two runs either side of a suspend, which is exactly the comparison that
+    # matters, were both thrown away.
+    afg = AFG_NID
+    node_count = c.verb(ROOT_NID, PARAMETERS, AC_PAR_NODE_COUNT)
+    start, num = (node_count >> 16) & 0x7FFF, node_count & 0x7FFF
+    for nid in range(start, start + num):
+        if (c.verb(nid, PARAMETERS, AC_PAR_FUNCTION_TYPE) & 0x7F) == 0x01:
+            afg = nid
+            break
+
+    entry = {
+        'engine': c.engine(),
+        'gpio_data': c.verb(afg, GET_GPIO_DATA, 0),
+        'gpio_mask': c.verb(afg, GET_GPIO_MASK, 0),
+        'gpio_dir': c.verb(afg, GET_GPIO_DIRECTION, 0),
+        'afg_power': c.verb(afg, GET_POWER_STATE, 0),
+        'proc_state': c.verb(VENDOR_NID, GET_PROC_STATE, 0),
+        'pin1d_cfg': '%08x' % c.verb(SPEAKER_PIN, GET_CONFIG_DEFAULT, 0),
+    }
+    r['as_found'] = entry
+
+    # --- identity -------------------------------------------------------
+    vendor = c.verb(ROOT_NID, PARAMETERS, AC_PAR_VENDOR_ID)
+    ssid = c.verb(afg, PARAMETERS, AC_PAR_SUBSYSTEM_ID)
+    ssid_verb = c.verb(afg, GET_SUBSYSTEM_ID, 0)
+    rev = c.verb(ROOT_NID, PARAMETERS, AC_PAR_REV_ID)
+    r['identity'] = {'root_nid': ROOT_NID, 'afg_nid': afg,
+                     'vendor_id': '%08x' % vendor,
+                     'subsystem_id': '%08x' % ssid,
+                     'subsystem_id_verb_f20': '%08x' % ssid_verb,
+                     'revision_id': '%08x' % rev}
+    if vendor != 0x10134208:
+        record('identity.codec', 'BLOCKED',
+               'root node %#04x parameter %#04x returned %08x, not the CS4208 '
+               '(AFG %#04x, subsystem %08x) - the verb path itself is suspect'
+               % (ROOT_NID, AC_PAR_VENDOR_ID, vendor, afg, ssid))
+        if args.json:
+            with open(args.json, 'w') as f:
+                json.dump(r, f, indent=1, sort_keys=True)
+        return 2
+    record('identity.codec', 'PASS',
+           'CS4208 %08x rev %08x, AFG %#04x, subsystem %08x' % (vendor, rev, afg, ssid))
+    print('as found: engine %s  gpio data %#04x mask %#04x dir %#04x  '
+          'proc_state %#x  pin 0x1d %s'
+          % (entry['engine'], entry['gpio_data'], entry['gpio_mask'],
+             entry['gpio_dir'], entry['proc_state'], entry['pin1d_cfg']))
+
+    original_enable = entry['engine']['00']
+    restored = False
+
+    try:
+        # --- T1: does a coefficient write reach the hardware at all? ----
+        # Coefficient 0x14 is the I2C address register. Writing it changes no
+        # bus state on its own; it is the cheapest register whose read-back is
+        # meaningful. Two distinct values, so a stuck-at reading cannot pass.
+        t1 = []
+        for probe in (0x55, 0xAA, entry['engine']['14']):
+            c.cset(C_ADDR, probe)
+            t1.append((probe, c.cget(C_ADDR)))
+        ok = all(w == g for w, g in t1)
+        record('transport.coef_writes_stick', 'PASS' if ok else 'FAIL',
+               ' '.join('wrote %#06x read %#06x' % t for t in t1))
+        r['tests']['transport.coef_writes_stick']['data'] = \
+            [{'wrote': w, 'read': g} for w, g in t1]
+
+        # --- T1b: classify each engine register by behaviour --------------
+        # The mistake this project keeps making is treating five coefficients
+        # as one kind of thing. They are not. But the first version of this
+        # test wrote 0x55 and 0x2a into every one of them INCLUDING
+        # coefficient 0x00 - which is not a scratch register, it is firmware
+        # configuration reading 0x00c4, and scrambling its unknown bits is
+        # exactly the blind register write this project is not allowed to do.
+        # It also ran before the rest of the transport tests, so that run's
+        # sweep was taken with 0x00 corrupted and its result is void.
+        #
+        # What each register may be written with is now bounded by what is
+        # known about it:
+        #
+        #   0x00  bit 3 only, every other bit preserved
+        #   0x14  the I2C address; arbitrary is safe because no transaction
+        #         is triggered by writing it
+        #   0x15  the data register; likewise inert outside a transaction
+        #   0x16  ONLY the values Apple's own driver writes: 0x04, 0x02, 0x00
+        #   0x17  never written. Read repeatedly instead, and report whether
+        #         it ever moves.
+        klass = {}
+
+        def with_bridge(open_it):
+            v = c.cget(C_ENABLE)
+            c.cset(C_ENABLE, (v | BRIDGE_BIT) if open_it else (v & ~BRIDGE_BIT))
+            return c.cget(C_ENABLE)
+
+        for idx, probes in ((C_ADDR, (0x55, 0x2A)),
+                            (C_DATA, (0x55, 0x2A)),
+                            (C_CTRL, (CTRL_START, CTRL_STOP))):
+            row = {}
+            for label, open_it in (('bridge_open', True), ('bridge_closed', False)):
+                with_bridge(open_it)
+                seen = []
+                for v in probes:
+                    c.cset(idx, v)
+                    seen.append((v, c.cget(idx)))
+                row[label] = [{'wrote': w, 'read': g} for w, g in seen]
+                row[label + '_verdict'] = (
+                    'latches' if all(w == g for w, g in seen)
+                    else 'reads back 0' if all(g == 0 for _, g in seen)
+                    else 'reads back something else')
+            klass['%02x' % idx] = row
+            print('  coef %#04x  open: %-22s closed: %-22s'
+                  % (idx, row['bridge_open_verdict'], row['bridge_closed_verdict']))
+
+        # 0x00: only the bit we are entitled to touch.
+        opened = with_bridge(True)
+        closed = with_bridge(False)
+        klass['00'] = {'bridge_open': opened, 'bridge_closed': closed,
+                       'entry': original_enable,
+                       'verdict': 'bit 3 follows, other bits preserved'
+                       if (opened & ~BRIDGE_BIT) == (original_enable & ~BRIDGE_BIT)
+                       and (closed & ~BRIDGE_BIT) == (original_enable & ~BRIDGE_BIT)
+                       else 'other bits moved - do not write this register'}
+        print('  coef 0x00  %s (entry %#06x, open %#06x, closed %#06x)'
+              % (klass['00']['verdict'], original_enable, opened, closed))
+
+        # 0x17: never written. Does it ever move on its own?
+        seen17 = [c.cget(C_STATUS) for _ in range(8)]
+        klass['17'] = {'never_written': True, 'reads': seen17,
+                       'verdict': 'constant %#06x over 8 reads' % seen17[0]
+                       if len(set(seen17)) == 1 else 'varies: %s' % seen17}
+        print('  coef 0x17  %s (never written)' % klass['17']['verdict'])
+
+        r['engine_register_behaviour'] = klass
+        c.cset(C_ADDR, entry['engine']['14'])
+        c.cset(C_ENABLE, original_enable)
+        record('transport.register_classification', 'PASS',
+               'engine registers classified within bounded, known-safe writes')
+
+        # --- T2: does the bridge enable bit latch? ----------------------
+        v = c.cget(C_ENABLE)
+        c.cset(C_ENABLE, v ^ BRIDGE_BIT)
+        c.cset(C_ENABLE, (v ^ BRIDGE_BIT) | BRIDGE_BIT)
+        opened = c.cget(C_ENABLE)
+        ok = bool(opened & BRIDGE_BIT)
+        record('transport.bridge_latches', 'PASS' if ok else 'FAIL',
+               'coef 0x00 %#06x -> %#06x (bit 3 %s)'
+               % (v, opened, 'set' if ok else 'CLEAR'))
+        r['tests']['transport.bridge_latches']['data'] = \
+            {'before': v, 'after': opened}
+
+        # --- T3: does the engine consume a control write? ---------------
+        # With the bridge OPEN the engine should act on 0x16 and clear it.
+        # With the bridge CLOSED nothing should act on it, so it should still
+        # read back. If both read the same, writing 0x16 does nothing either
+        # way and there is no engine behind this register.
+        c.cset(C_CTRL, CTRL_START)
+        open_readback = c.cget(C_CTRL)
+        c.cset(C_CTRL, CTRL_STOP)
+        c.cget(C_STATUS)
+
+        c.cset(C_ENABLE, original_enable & ~BRIDGE_BIT)
+        closed_before = c.cget(C_ENABLE)
+        c.cset(C_CTRL, CTRL_START)
+        closed_readback = c.cget(C_CTRL)
+        c.cset(C_CTRL, 0x00)
+
+        # Three outcomes, and only one of them is conclusive:
+        #   open 0x00, closed 0x04  -> the engine consumed the command: proof
+        #                              that something acts on 0x16, gated by
+        #                              the bridge bit
+        #   open == closed == 0x04  -> 0x16 is a plain latch; nothing acts on it
+        #   open == closed == 0x00  -> 0x16 self-clears either way; this test
+        #                              cannot tell an engine from a
+        #                              write-one-clear register, so it is
+        #                              INCONCLUSIVE, not a failure
+        if open_readback != closed_readback:
+            st, why = 'PASS', 'the engine consumed the command, and only with the bridge open'
+        elif open_readback == CTRL_START:
+            # It holds what was written, with the bridge open and closed
+            # alike. That is what a plain latch looks like - and it is also
+            # what a LEVEL control line looks like, one that stays asserted
+            # until it is written again rather than self-clearing on
+            # completion. This test cannot tell those apart, so it must not
+            # report either of them as a finding.
+            st, why = 'BLOCKED', ('0x16 holds what was written in both states; a latch and a '
+                                  'level control line are indistinguishable here, so this says '
+                                  'nothing about whether an engine ran')
+        else:
+            st, why = 'BLOCKED', ('0x16 reads back clear in both states; this test cannot '
+                                  'separate an engine from a write-one-clear bit')
+        record('transport.engine_responds', st,
+               'ctrl read-back after START: bridge open %#06x, bridge closed '
+               '%#06x - %s' % (open_readback, closed_readback, why))
+        r['tests']['transport.engine_responds']['data'] = {
+            'bridge_open_readback': open_readback,
+            'bridge_closed_readback': closed_readback,
+            'bridge_closed_enable': closed_before,
+        }
+
+        # --- T4: the measurement that matters --------------------------
+        c.cset(C_ENABLE, original_enable ^ BRIDGE_BIT)
+        c.cset(C_ENABLE, (original_enable ^ BRIDGE_BIT) | BRIDGE_BIT)
+
+        trace = []
+        first = i2c_read(c, AMPS[0][0], 0x01, trace=trace)
+        r['first_transaction'] = {'addr': AMPS[0][0], 'reg': 0x01,
+                                  'value': first, 'trace': trace}
+        print('\nfirst transaction, amp %#04x register 0x01 -> %#06x'
+              % (AMPS[0][0], first))
+        for t in trace:
+            print('   %-22s %s%s' % (t['step'], t['engine'],
+                                     '' if 'value' not in t
+                                     else '  value %#06x' % t['value']))
+
+        fast = sweep(c)
+        r['sweep_fast'] = fast
+        slow = sweep(c, settle=0.001)
+        r['sweep_1ms'] = slow
+
+        print('\n%-8s %s' % ('address', ' '.join('r%02x' % x for x in AMP_REGS)))
+        for addr in [a for a, _ in AMPS] + CONTROLS:
+            tag = 'amp' if addr in [a for a, _ in AMPS] else 'ctl'
+            row = fast['%02x' % addr]
+            print('%s %#04x %s' % (tag, addr,
+                                   ' '.join('%04x' % row['%02x' % x] for x in AMP_REGS)))
+
+        amps_only = {k: v for k, v in fast.items()
+                     if int(k, 16) in [a for a, _ in AMPS]}
+        ctls_only = {k: v for k, v in fast.items() if int(k, 16) in CONTROLS}
+        # The three controls are the baseline for "nothing there". They
+        # must agree with each other first; an amplifier row that differs
+        # from a baseline that itself moves proves nothing.
+        ctl_rows = list(ctls_only.values())
+        controls_agree = all(row == ctl_rows[0] for row in ctl_rows)
+        amp_vs_ctl_differ = controls_agree and any(
+            a != ctl_rows[0] for a in amps_only.values())
+
+        if amp_vs_ctl_differ:
+            record('transport.discriminates', 'PASS',
+                   'amplifier addresses answer differently from the controls; '
+                   'the read path measures something real')
+        elif identical(fast):
+            record('transport.discriminates', 'FAIL',
+                   'every address - amplifiers and controls alike - returned '
+                   'the identical register map; this read path cannot '
+                   'distinguish a present device from an absent one')
+            r['notes'].append(
+                'INVALID READ PATH. No claim about amplifier presence, '
+                'reachability or configuration may be drawn from these values, '
+                'in either direction.')
+        elif not controls_agree:
+            record('transport.discriminates', 'FAIL',
+                   'the three control addresses answered differently from '
+                   'each other; without a stable baseline this read path '
+                   'cannot distinguish a present device from an absent one')
+        else:
+            record('transport.discriminates', 'FAIL',
+                   'amplifier addresses do not differ from the controls')
+
+        expected_hits = 0
+        for addr, slot in AMPS:
+            row = fast['%02x' % addr]
+            for reg, want in EXPECTED.items():
+                got = row['%02x' % reg] & 0xFF
+                if reg == 0x03:
+                    want |= slot
+                if got == want:
+                    expected_hits += 1
+        total = len(AMPS) * len(EXPECTED)
+        record('transport.matches_bringup',
+               'PASS' if expected_hits > total // 2 else 'FAIL',
+               '%d of %d amplifier registers read back the value Apple\'s '
+               'bring-up writes' % (expected_hits, total))
+        r['tests']['transport.matches_bringup']['data'] = \
+            {'hits': expected_hits, 'total': total}
+
+        record('transport.timing_sensitive',
+               'PASS' if fast == slow else 'FAIL',
+               'a 1 ms settle after every step changed nothing'
+               if fast == slow else
+               'a 1 ms settle after every step CHANGED the result - the '
+               'back-to-back verb rate is part of the problem')
+
+    finally:
+        # Restore coefficient 0x00 byte-exact. Apple's own disable is a bare
+        # toggle, which would leave the bridge open if it was already closed;
+        # writing the value back is strictly more faithful to what we found.
+        try:
+            c.cset(C_CTRL, CTRL_STOP)
+            c.cget(C_STATUS)
+            c.cset(C_ADDR, entry['engine']['14'])
+            c.cset(C_ENABLE, original_enable)
+            now = c.engine()
+            restored = now['00'] == original_enable
+            r['restore'] = {'engine': now, 'ok': restored}
+            print('\nrestore: coef 0x00 %#06x (as found %#06x) %s'
+                  % (now['00'], original_enable, 'OK' if restored else 'MISMATCH'))
+            record('probe.restored_entry_state',
+                   'PASS' if restored else 'FAIL',
+                   'I2C bridge enable returned to the value found at entry')
+        except OSError as e:
+            r['restore'] = {'error': str(e), 'ok': False}
+            print('restore FAILED: %s' % e, file=sys.stderr)
+            record('probe.restored_entry_state', 'FAIL',
+                   'restore raised %s; coef 0x00 may not be back to %#06x'
+                   % (e, original_enable))
+
+    r['verbs_issued'] = c.verbs
+    r['monotonic_end'] = time.monotonic()
+
+    verdict_test = r['tests'].get('transport.discriminates', {})
+    r['verdict'] = ('TRANSPORT_VALID' if verdict_test.get('status') == 'PASS'
+                    else 'TRANSPORT_INVALID')
+    print('\nverdict: %s' % r['verdict'])
+
+    if args.json:
+        with open(args.json, 'w') as f:
+            json.dump(r, f, indent=1, sort_keys=True)
+        os.chmod(args.json, 0o644)
+    return 0
+
+
+if __name__ == '__main__':
+    sys.exit(main())

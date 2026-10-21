@@ -1,0 +1,1093 @@
+#!/usr/bin/env bash
+# SPDX-License-Identifier: GPL-3.0-or-later
+# macbook91-runner - one entry point for every MacBook9,1 audio measurement.
+#
+# Replaces the scatter of macbook91-{speaker,suspend,i2c,dfet,i2c-clock}-probe
+# and macbook91-suspend-triage. Those stay in the tree as evidence of what was
+# run, but nothing new should be added to them.
+#
+#   macbook91-runner selfcheck            unprivileged; no hardware is touched
+#   macbook91-runner preflight            unprivileged; identity and versions
+#   sudo macbook91-runner probe           privileged; the amplifier transport
+#        ... probe --with-stream          ... and the state while a stream of
+#                                         digital silence is actually running
+#   sudo macbook91-runner cycle           privileged; suspend/resume, needs a
+#                                         test window and --allow-suspend
+#   sudo macbook91-runner jackstream      privileged; a real capture plus a
+#                                         safe playback, headphones plugged
+#                                         and unplugged once, checking whether
+#                                         either stream survives the AFG power
+#                                         cycling the jack callback does
+#   macbook91-runner wake                 measure what wakes the machine early
+#        ... wake --disarm RP09,XHC1      (root) same, with those wake sources
+#                                         off, restored exactly afterwards
+#   macbook91-runner report [RUNID]       re-print a stored run
+#   macbook91-runner diff [A B]           what changed between two captures
+#                                         (no arguments: the last two)
+#   any command ... --card N              use ALSA card N; it must carry the CS4208
+#
+# Rules this tool enforces on itself, each of which is a bug it has already had:
+#
+#   * every unit it touches has its exact prior state saved and put back, and
+#     a unit that was already masked stays masked
+#   * restore is unconditional, runs from a trap on EXIT/INT/TERM, verifies the
+#     result, and prints manual recovery if the verification fails
+#   * no function that sets caller state is ever called in a subshell
+#   * target identity is re-verified after every step that could change it,
+#     not only once at the beginning
+#   * a test that could not run is BLOCKED or NOT_RUN, never silence that reads
+#     as a pass, and a missing mandatory test cannot produce an overall PASS
+#   * everything lands in one run directory that survives a reboot
+
+set -Eeuo pipefail
+
+VERSION=1.0.0
+SELF=$(readlink -f "$0")
+TOOLS=$(dirname "$SELF")
+
+# ---------------------------------------------------------------- run state
+
+: "${MACBOOK91_STATE_DIR:=${SUDO_USER:+/home/$SUDO_USER}}"
+if [ -z "${MACBOOK91_STATE_DIR:-}" ] || [ "$MACBOOK91_STATE_DIR" = "" ]; then
+	MACBOOK91_STATE_DIR="$HOME"
+fi
+STATE_ROOT="$MACBOOK91_STATE_DIR/.local/state/macbook91-cs4208"
+RUNS="$STATE_ROOT/runs"
+
+RUNID=""
+RUNDIR=""
+REPORT=""
+RESULTS=""
+declare -A RESULT_STATUS=()
+declare -A RESULT_DETAIL=()
+declare -a RESULT_ORDER=()
+declare -a MANDATORY=()
+
+# systemd user units we may mask, and the exact state each was in
+declare -A UNIT_WAS_MASKED=()
+declare -a UNITS_TOUCHED=()
+UNITS_RESTORED=no
+
+CARD=0
+DISARM=""
+declare -A ACPI_WAKE_PRIOR=()
+ACPI_WAKE_RESTORED=nothing-to-do
+ALLOW_SUSPEND=no
+WITH_STREAM=no
+SILENCE_PID=""
+
+# jackstream: capture/tone/playback PIDs and the capture file, tracked at
+# script scope so on_exit can stop every background process and remove the
+# recording even when cmd_jackstream is interrupted mid-run.
+JACKSTREAM_CAP_PID=""
+JACKSTREAM_TONE_PID=""
+JACKSTREAM_PLAY_PID=""
+JACKSTREAM_CAPFILE=""
+JACKSTREAM_FIFO=""
+
+# ---------------------------------------------------------------- plumbing
+
+log()  { printf '%s\n' "$*" | tee -a "$REPORT" ; }
+logq() { printf '%s\n' "$*" >>"$REPORT" ; }
+hr()   { log "" ; log "== $* ==" ; }
+die()  { printf 'macbook91-runner: %s\n' "$*" >&2 ; exit 3 ; }
+
+# result NAME STATUS DETAIL [mandatory]
+result() {
+	local name=$1 status=$2 detail=$3 mand=${4:-}
+	case $status in PASS|FAIL|BLOCKED|NOT_RUN|SKIPPED) ;; *) die "bad status $status" ;; esac
+	# Each name once in the listing; a later result overwrites an expect().
+	[ -n "${RESULT_STATUS[$name]+set}" ] || RESULT_ORDER+=("$name")
+	RESULT_STATUS[$name]=$status
+	RESULT_DETAIL[$name]=$detail
+	[ -n "$mand" ] && MANDATORY+=("$name")
+	log "$(printf '%-38s %-8s %s' "$name" "$status" "$detail")"
+}
+
+# Declare a mandatory test up front so that never reaching it is visible as
+# NOT_RUN rather than as an absence nobody notices.
+expect() {
+	local name
+	for name in "$@"; do
+		[ -n "${RESULT_STATUS[$name]+set}" ] || RESULT_ORDER+=("$name")
+		RESULT_STATUS[$name]=NOT_RUN
+		RESULT_DETAIL[$name]='not reached'
+		MANDATORY+=("$name")
+	done
+}
+
+json_escape() { python3 -c 'import json,sys; print(json.dumps(sys.argv[1]))' "$1"; }
+
+write_results() {
+	{
+		printf '{\n "tool": "macbook91-runner",\n "version": "%s",\n' "$VERSION"
+		printf ' "run_id": %s,\n' "$(json_escape "$RUNID")"
+		printf ' "utc": %s,\n' "$(json_escape "$(date -u +%Y-%m-%dT%H:%M:%SZ)")"
+		printf ' "monotonic": "%s",\n' "$(cut -d' ' -f1 /proc/uptime)"
+		printf ' "command": %s,\n' "$(json_escape "$COMMAND")"
+		printf ' "units_restored": %s,\n' "$(json_escape "$UNITS_RESTORED")"
+		printf ' "acpi_wake_restored": %s,\n' "$(json_escape "$ACPI_WAKE_RESTORED")"
+		printf ' "tests": {\n'
+		local first=1 n
+		for n in "${RESULT_ORDER[@]}"; do
+			[ $first -eq 1 ] || printf ',\n'
+			first=0
+			printf '  %s: {"status": %s, "detail": %s}' \
+				"$(json_escape "$n")" \
+				"$(json_escape "${RESULT_STATUS[$n]}")" \
+				"$(json_escape "${RESULT_DETAIL[$n]}")"
+		done
+		printf '\n },\n'
+		printf ' "verdict": %s\n}\n' "$(json_escape "$(verdict)")"
+	} >"$RESULTS"
+}
+
+verdict() {
+	local n fail=0 blocked=0 notrun=0
+	for n in "${RESULT_ORDER[@]}"; do
+		case ${RESULT_STATUS[$n]} in
+		FAIL) fail=$((fail+1)) ;;
+		BLOCKED) blocked=$((blocked+1)) ;;
+		esac
+	done
+	for n in "${MANDATORY[@]:-}"; do
+		[ -n "$n" ] || continue
+		[ "${RESULT_STATUS[$n]}" = NOT_RUN ] && notrun=$((notrun+1))
+	done
+	if [ $fail -gt 0 ]; then echo FAIL
+	elif [ $notrun -gt 0 ]; then echo INCOMPLETE
+	elif [ $blocked -gt 0 ]; then echo BLOCKED
+	else echo PASS
+	fi
+}
+
+exit_code_for() {
+	case $1 in PASS) echo 0 ;; FAIL) echo 1 ;; BLOCKED) echo 2 ;; INCOMPLETE) echo 4 ;; *) echo 3 ;; esac
+}
+
+# ---------------------------------------------------------------- unit state
+#
+# Never called in a subshell: it sets UNIT_WAS_MASKED in the caller. A previous
+# version of this logic lost that assignment to a command substitution and left
+# PipeWire masked across a reboot.
+
+user_systemctl() {
+	if [ -n "${SUDO_USER:-}" ] && [ "$(id -u)" = 0 ]; then
+		local uid; uid=$(id -u "$SUDO_USER")
+		sudo -u "$SUDO_USER" \
+			XDG_RUNTIME_DIR="/run/user/$uid" \
+			DBUS_SESSION_BUS_ADDRESS="unix:path=/run/user/$uid/bus" \
+			systemctl --user "$@"
+	else
+		systemctl --user "$@"
+	fi
+}
+
+save_unit_states() {
+	local u st
+	for u in "$@"; do
+		st=$(user_systemctl is-enabled "$u" 2>/dev/null || true)
+		if [ "$st" = masked ]; then
+			UNIT_WAS_MASKED[$u]=yes
+		else
+			UNIT_WAS_MASKED[$u]=no
+		fi
+		UNITS_TOUCHED+=("$u")
+	done
+	printf '%s\n' "${UNITS_TOUCHED[@]}" >"$RUNDIR/units-touched.txt"
+	for u in "${UNITS_TOUCHED[@]}"; do
+		printf '%s masked=%s\n' "$u" "${UNIT_WAS_MASKED[$u]}"
+	done >"$RUNDIR/units-prior-state.txt"
+}
+
+restore_units() {
+	# Unconditional by construction: it walks the units it recorded and puts
+	# each one back to exactly the state it was found in. Units that were
+	# already masked are left masked.
+	local u rc=0 unmask=()
+	[ ${#UNITS_TOUCHED[@]} -eq 0 ] && { UNITS_RESTORED=nothing-to-do; return 0; }
+	for u in "${UNITS_TOUCHED[@]}"; do
+		[ "${UNIT_WAS_MASKED[$u]:-no}" = yes ] && continue
+		unmask+=("$u")
+	done
+	if [ ${#unmask[@]} -gt 0 ]; then
+		user_systemctl unmask "${unmask[@]}" >/dev/null 2>&1 || rc=1
+		user_systemctl daemon-reload >/dev/null 2>&1 || true
+		user_systemctl start "${unmask[@]}" >/dev/null 2>&1 || true
+	fi
+	# Verify, and say so loudly if it did not take.
+	local bad=()
+	for u in "${unmask[@]}"; do
+		[ "$(user_systemctl is-enabled "$u" 2>/dev/null || true)" = masked ] && bad+=("$u")
+	done
+	if [ ${#bad[@]} -gt 0 ]; then
+		UNITS_RESTORED=FAILED
+		cat >&2 <<-EOF
+
+		*** these user units are still masked: ${bad[*]}
+		*** recover with, as your normal user, no sudo:
+		***   systemctl --user unmask ${bad[*]}
+		***   systemctl --user start pipewire.socket pipewire.service wireplumber.service
+		EOF
+		return 1
+	fi
+	UNITS_RESTORED=ok
+	return $rc
+}
+
+# ---------------------------------------------------------------- acpi wake
+#
+# /proc/acpi/wakeup is a TOGGLE: writing a device name flips it. So the prior
+# state of every name has to be read first, only the ones that actually differ
+# from the target may be written, and the exact prior state has to be put back.
+# The same discipline the systemd units get, for the same reason.
+
+acpi_wake_state() {
+	awk -v n="$1" '$1 == n { print ($3 ~ /enabled/) ? "enabled" : "disabled" }' \
+		/proc/acpi/wakeup
+}
+
+acpi_wake_disarm() {
+	local names=$1 n cur now
+	[ -n "$names" ] || return 0
+	for n in ${names//,/ }; do
+		cur=$(acpi_wake_state "$n")
+		if [ -z "$cur" ]; then
+			result "wake.disarm.$n" BLOCKED "no such device in /proc/acpi/wakeup"
+			continue
+		fi
+		# Keep the state as first found: a name given twice must not record
+		# its own disarmed state over it, or the restore leaves it off.
+		[ -n "${ACPI_WAKE_PRIOR[$n]+set}" ] || ACPI_WAKE_PRIOR[$n]=$cur
+		if [ "$cur" = enabled ]; then
+			printf '%s' "$n" >/proc/acpi/wakeup 2>/dev/null || true
+		fi
+		now=$(acpi_wake_state "$n")
+		if [ "$now" = disabled ]; then
+			result "wake.disarm.$n" PASS "was $cur, now $now"
+		else
+			result "wake.disarm.$n" BLOCKED "was $cur, still ${now:-unknown} after the write; this cycle measures with it armed"
+		fi
+	done
+	printf '%s\n' "${!ACPI_WAKE_PRIOR[@]}" >"$RUNDIR/acpi-wake-touched.txt" 2>/dev/null || true
+}
+
+acpi_wake_restore() {
+	local n cur bad=()
+	[ ${#ACPI_WAKE_PRIOR[@]} -eq 0 ] && return 0
+	for n in "${!ACPI_WAKE_PRIOR[@]}"; do
+		cur=$(acpi_wake_state "$n")
+		[ "$cur" = "${ACPI_WAKE_PRIOR[$n]}" ] && continue
+		printf '%s' "$n" >/proc/acpi/wakeup 2>/dev/null || true
+		cur=$(acpi_wake_state "$n")
+		[ "$cur" = "${ACPI_WAKE_PRIOR[$n]}" ] || bad+=("$n")
+	done
+	if [ ${#bad[@]} -gt 0 ]; then
+		ACPI_WAKE_RESTORED=FAILED
+		cat >&2 <<-EOF
+
+		*** these ACPI wake sources are NOT back to how they were found: ${bad[*]}
+		*** /proc/acpi/wakeup is a toggle; restore with, as root:
+		*** $(for n in "${bad[@]}"; do printf '  echo %s > /proc/acpi/wakeup   # want %s\n' "$n" "${ACPI_WAKE_PRIOR[$n]}"; done)
+		EOF
+		return 1
+	fi
+	ACPI_WAKE_RESTORED=ok
+	return 0
+}
+
+# Digital silence on the speaker PCM.
+#
+# Every field in a capture taken at rest is the state of a codec in D3: every
+# widget here reports power 0x33, and converter 0x0a's stream format is a
+# stale latch. Whatever differs between a working machine and a resumed one
+# may only exist while a stream is actually running.
+#
+# The stream is /dev/zero - every sample is zero. There is no signal at any
+# gain, so this needs no listening test, no presence confirmation and no
+# acoustic gate. It exercises the whole prepare path: converter programming,
+# power-up, stream tag, pin control.
+start_silence() {
+	local dev=$1
+	aplay -D "$dev" -f S16_LE -r 44100 -c 4 -t raw -q /dev/zero >/dev/null 2>&1 &
+	SILENCE_PID=$!
+}
+
+stop_silence() {
+	[ -n "$SILENCE_PID" ] || return 0
+	kill "$SILENCE_PID" 2>/dev/null || true
+	wait "$SILENCE_PID" 2>/dev/null || true
+	SILENCE_PID=""
+}
+
+# Stops every background process cmd_jackstream started (capture, tone
+# generator, playback) and removes the capture file and FIFO. Safe to call
+# more than once and safe to call when jackstream never ran or already
+# finished cleanly. Called from on_exit so Ctrl-C, SIGTERM or an early
+# return never leaves a root-owned arecord/aplay/tone process running or a
+# microphone recording on disk.
+stop_jackstream() {
+	local pid
+	for pid in "$JACKSTREAM_CAP_PID" "$JACKSTREAM_TONE_PID" "$JACKSTREAM_PLAY_PID"; do
+		[ -n "$pid" ] || continue
+		kill "$pid" 2>/dev/null || true
+		wait "$pid" 2>/dev/null || true
+	done
+	JACKSTREAM_CAP_PID=""; JACKSTREAM_TONE_PID=""; JACKSTREAM_PLAY_PID=""
+	[ -n "$JACKSTREAM_CAPFILE" ] && rm -f "$JACKSTREAM_CAPFILE"
+	JACKSTREAM_CAPFILE=""
+	[ -n "$JACKSTREAM_FIFO" ] && rm -f "$JACKSTREAM_FIFO"
+	JACKSTREAM_FIFO=""
+}
+
+pcm_state() {
+	cat "/proc/asound/card$CARD/pcm0p/sub0/status" 2>/dev/null | sed -n 's/^state: *//p'
+}
+
+# The safe tone macbook91-audio-verify uses (440 Hz, 12% of full scale, 50 ms
+# fades, never speaker-test), generated continuously by one long-lived process
+# instead of a shell loop respawning a fixed-length generator. A shell `while :; do … done |
+# aplay &` pipeline has no single PID that names the whole pipeline ($! is
+# only the last element, aplay), so the generator cannot be tracked or
+# stopped and (once aplay is killed) respawns forever on the broken pipe.
+# One process fixes both problems: it is the thing $! actually names, and it
+# owns the fade-out on its own exit instead of clicking every few seconds.
+quiet_tone_forever() {
+	python3 - "$1" <<'PYTONE'
+import math, struct, sys
+ch = int(sys.argv[1])
+rate, amp, fade = 44100, 0.12, int(44100 * 0.05)
+i = 0
+try:
+    while True:
+        chunk = bytearray()
+        for _ in range(rate):
+            env = min(1.0, i / fade) if i < fade else 1.0
+            v = int(amp * env * 32767 * math.sin(2 * math.pi * 440 * i / rate))
+            chunk += struct.pack('<' + 'h' * ch, *([v] * ch))
+            i += 1
+        sys.stdout.buffer.write(bytes(chunk))
+        sys.stdout.buffer.flush()
+except BrokenPipeError:
+    sys.exit(0)
+PYTONE
+}
+
+# The headphone jack control's numid is not stable across kernels/cards, so
+# look it up by name each time rather than hardcoding a fixed control number.
+hp_jack_numid() {
+	amixer -c "$CARD" controls 2>/dev/null \
+		| grep -i "'Headphone.*Jack'" | head -1 \
+		| sed -n "s/^numid=\([0-9]*\).*/\1/p"
+}
+
+hp_jack_state() {
+	local numid; numid=$(hp_jack_numid)
+	[ -n "$numid" ] || return 1
+	amixer -c "$CARD" cget "numid=$numid" 2>/dev/null \
+		| sed -n 's/^ *: values=//p' | head -1
+}
+
+# codec power state of the AFG and the ADC (the audio-in converter), from a
+# macbook91-codec-state capture. Prints "AFG=<state> ADC=<state>".
+afg_adc_power() {
+	local statefile=$1
+	[ -s "$statefile" ] || { printf 'AFG=? ADC=?'; return 1; }
+	python3 -c '
+import json, sys
+d = json.load(open(sys.argv[1]))
+afg = d.get("afg_power", "?")
+adc = "?"
+for n in d.get("nodes", {}).values():
+    if n.get("type") == "audio-in":
+        adc = n.get("power", "?")
+        break
+print("AFG=%s ADC=%s" % (afg, adc))
+' "$statefile"
+}
+
+# Stream tag of every audio-input converter, from the codec's proc file, e.g.
+# "0x06=1 0x07=0". A capture reads from the converter that carries its stream
+# tag; one left at 0 under a running capture delivers no samples
+# (docs/INCIDENT-20261019.md).
+adc_stream_tags() {
+	awk '/^Node 0x/ { node = $2; ain = ($0 ~ /\[Audio Input\]/) }
+	     ain && /Converter:/ {
+		tag = $0; sub(/.*stream=/, "", tag); sub(/,.*/, "", tag)
+		printf "%s%s=%s", sep, node, tag; sep = " "
+	     }' "/proc/asound/card$CARD/codec#0" 2>/dev/null
+}
+
+on_exit() {
+	local rc=$?
+	trap - EXIT INT TERM
+	stop_silence
+	stop_jackstream
+	acpi_wake_restore || true
+	restore_units || true
+	[ -n "$RESULTS" ] && write_results || true
+	exit $rc
+}
+
+# ---------------------------------------------------------------- identity
+#
+# Re-callable. Every destructive step calls it again, because the one thing
+# this project has actually been bitten by is a re-probe silently changing the
+# identity the measurement depended on.
+
+CODEC_VENDOR=""; CODEC_SSID=""; PCM_CHMAX=""; LOADED_SRCVER=""; DISK_SRCVER=""
+DMI_VENDOR=""; DMI_PRODUCT=""; CARD_PATH=""
+
+read_identity() {
+	DMI_VENDOR=$(cat /sys/class/dmi/id/sys_vendor 2>/dev/null || echo '?')
+	DMI_PRODUCT=$(cat /sys/class/dmi/id/product_name 2>/dev/null || echo '?')
+
+	# Find the card by name, never by a hardcoded number. --card N only
+	# narrows the search to card N, which must still carry the CS4208.
+	local n
+	CARD=""
+	for n in /proc/asound/card[0-9]*; do
+		[ -z "${CARD_OVERRIDE:-}" ] || [ "$n" = "/proc/asound/card$CARD_OVERRIDE" ] || continue
+		[ -e "$n/codec#0" ] || continue
+		if grep -qi 'CS4208' "$n/codec#0" 2>/dev/null; then
+			CARD=${n##*card}
+			CARD_PATH=$n
+			break
+		fi
+	done
+	if [ -z "$CARD" ]; then
+		CODEC_VENDOR=""; return 1
+	fi
+	CODEC_VENDOR=$(sed -n 's/^Vendor Id: *//p' "$CARD_PATH/codec#0" | head -1)
+	CODEC_SSID=$(sed -n 's/^Subsystem Id: *//p' "$CARD_PATH/codec#0" | head -1)
+	PCM_CHMAX=$(sed -n 's/^ *CHANNELS: *//p' "$CARD_PATH/pcm0p/sub0/hw_params" 2>/dev/null || true)
+	if [ -z "$PCM_CHMAX" ]; then
+		PCM_CHMAX=$(sed -n 's/^channels_max: *//p' "$CARD_PATH/pcm0p/info" 2>/dev/null || true)
+	fi
+	LOADED_SRCVER=$(cat /sys/module/snd_hda_codec_cs420x/srcversion 2>/dev/null || echo '-')
+	DISK_SRCVER=$(/usr/sbin/modinfo -F srcversion snd_hda_codec_cs420x 2>/dev/null || echo '-')
+	# srcversion stayed the same when only a1534_pcm.h changed (the
+	# 2026-09-15 and 2026-10-06 runs and 20261015.01 all read one value).
+	# The version string ends in the Makefile's SRCID, a hash over cs420x.c
+	# and every a1534_*.h, which is what the verifier compares too.
+	LOADED_VER=$(cat /sys/module/snd_hda_codec_cs420x/version 2>/dev/null || echo '-')
+	DISK_VER=$(/usr/sbin/modinfo -F version snd_hda_codec_cs420x 2>/dev/null || echo '-')
+	return 0
+}
+
+check_identity() {
+	local phase=$1
+	if ! read_identity; then
+		result "identity.card[$phase]" BLOCKED "no ALSA card reports a CS4208 codec" m
+		return 1
+	fi
+	local ok=PASS why=""
+	[ "$DMI_PRODUCT" = "MacBook9,1" ] || { ok=FAIL; why="DMI is '$DMI_PRODUCT'"; }
+	[ "$CODEC_VENDOR" = "0x10134208" ] || { ok=FAIL; why="$why codec vendor $CODEC_VENDOR"; }
+	result "identity.target[$phase]" "$ok" \
+		"card $CARD, $DMI_VENDOR $DMI_PRODUCT, codec $CODEC_VENDOR ssid $CODEC_SSID${why:+ - $why}" m
+
+	# The A1534 path is only active when the speaker PCM offers four channels.
+	# hw:0,0 existing proves nothing; an earlier build learned that the hard way.
+	local chmax; chmax=$(pcm_channels_max)
+	if [ "$chmax" = 4 ]; then
+		result "identity.a1534_path[$phase]" PASS "speaker PCM offers 4 channels" m
+	elif [ -n "$chmax" ]; then
+		result "identity.a1534_path[$phase]" FAIL \
+			"speaker PCM offers $chmax channels, not 4 - the driver is on the generic path" m
+	else
+		result "identity.a1534_path[$phase]" BLOCKED "could not read the PCM channel count" m
+	fi
+
+	if [ "$LOADED_SRCVER" = '-' ]; then
+		result "identity.module[$phase]" FAIL "snd_hda_codec_cs420x is not loaded" m
+	elif [ "${LOADED_VER#*+}/$LOADED_SRCVER" = "${DISK_VER#*+}/$DISK_SRCVER" ]; then
+		result "identity.module[$phase]" PASS \
+			"loaded $LOADED_VER (srcversion $LOADED_SRCVER) matches the module on disk" m
+	else
+		result "identity.module[$phase]" FAIL \
+			"loaded $LOADED_VER ($LOADED_SRCVER) but the module on disk is $DISK_VER ($DISK_SRCVER) - the running code is not what is installed" m
+	fi
+}
+
+pcm_channels_max() {
+	# aplay is the supported, unprivileged way to ask ALSA what the device
+	# really offers. /proc/asound/.../hw_params only exists while a stream is
+	# open, so it cannot answer this at rest.
+	LC_ALL=C timeout 10 aplay -D "hw:$CARD,0" --dump-hw-params /dev/zero 2>&1 \
+		| sed -n 's/^CHANNELS: *//p' | tr -d '[]' | awk '{print $NF}' | head -1
+}
+
+# ---------------------------------------------------------------- commands
+
+cmd_selfcheck() {
+	hr "selfcheck (nothing is touched)"
+	local t=macbook91-amp-transport
+	if [ -x "$TOOLS/$t" ]; then
+		if python3 -c "import ast,sys; ast.parse(open(sys.argv[1]).read())" "$TOOLS/$t"; then
+			result "selfcheck.$t" PASS "present and parses"
+		else
+			result "selfcheck.$t" FAIL "does not parse"
+		fi
+	else
+		result "selfcheck.$t" FAIL "missing or not executable"
+	fi
+	for t in python3 aplay systemctl modinfo; do
+		if command -v "$t" >/dev/null; then
+			result "selfcheck.dep.$t" PASS "$(command -v "$t")"
+		else
+			result "selfcheck.dep.$t" FAIL "not installed"
+		fi
+	done
+	local free; free=$(df --output=avail -m "$STATE_ROOT" 2>/dev/null | tail -1 | tr -d ' ')
+	if [ -n "$free" ] && [ "$free" -gt 200 ]; then
+		result selfcheck.space PASS "${free} MB free under $STATE_ROOT"
+	else
+		result selfcheck.space FAIL "only ${free:-?} MB free under $STATE_ROOT"
+	fi
+	# Exercise the unit save/restore against units that do not exist, so the
+	# bookkeeping is tested without masking anything real.
+	save_unit_states macbook91-runner-nonexistent.service
+	if restore_units; then
+		result selfcheck.unit_restore PASS "save/restore bookkeeping runs and verifies"
+	else
+		result selfcheck.unit_restore FAIL "unit restore reported failure on a no-op"
+	fi
+	UNITS_TOUCHED=(); UNIT_WAS_MASKED=()
+	if [ "$(id -u)" = 0 ]; then
+		result selfcheck.not_root SKIPPED "running as root; selfcheck does not need it"
+	else
+		result selfcheck.not_root PASS "running unprivileged, as it should"
+	fi
+}
+
+cmd_preflight() {
+	hr "preflight - what can be known without root"
+	check_identity preflight || true
+	logq "--- uname ---"; uname -a >>"$REPORT"
+	logq "--- package ---"
+	pacman -Q macbook91-cs4208-dkms 2>/dev/null >>"$REPORT" \
+		|| pacman -Q macbook91-cs4208 2>>"$REPORT" >>"$REPORT" || true
+	logq "--- dkms ---"; dkms status 2>>"$REPORT" >>"$REPORT" || true
+	logq "--- module parameters ---"
+	local f
+	for f in /sys/module/snd_hda_codec_cs420x/parameters/*; do
+		[ -e "$f" ] || continue
+		printf '%s=%s\n' "${f##*/}" "$(cat "$f")" >>"$REPORT"
+	done
+	if [ -n "$CARD_PATH" ]; then
+		cp "$CARD_PATH/codec#0" "$RUNDIR/codec-proc-preflight.txt" 2>/dev/null || true
+		result preflight.codec_dump PASS "codec#0 captured to the run directory"
+	else
+		result preflight.codec_dump BLOCKED "no CS4208 card found"
+	fi
+	local sus; sus=$(cat /sys/power/mem_sleep 2>/dev/null || echo '?')
+	case $sus in
+	*"[deep]"*) result preflight.sleep_mode PASS "mem_sleep = $sus" ;;
+	*) result preflight.sleep_mode FAIL "mem_sleep = $sus - deep is not selected" ;;
+	esac
+	# Module parameter actually in force, not the one we assume.
+	local amp; amp=$(cat /sys/module/snd_hda_codec_cs420x/parameters/a1534_amp 2>/dev/null || echo '?')
+	result preflight.a1534_amp_param PASS "a1534_amp=$amp (recorded, not asserted)"
+}
+
+cmd_probe() {
+	[ "$(id -u)" = 0 ] || die "probe needs root for the HDA verb ioctl; run it with sudo"
+	expect transport.discriminates transport.coef_writes_stick \
+		probe.restored_entry_state state.captured
+	hr "preflight"
+	check_identity probe || true
+
+	# Mixer state and the driver's own log, captured with the rest. A muted
+	# Master and a zeroed Capture Volume replayed out of asound.state have
+	# each already cost this project a day, and neither is visible in the
+	# codec's widget state the way the rest of this is.
+	amixer -c "$CARD" scontents >"$RUNDIR/amixer.txt" 2>&1 || true
+	result state.mixer PASS "amixer scontents captured"
+	journalctl -k -b 0 --no-pager -o short-iso 2>/dev/null \
+		| grep -iE 'A1534|CS4208|PM: suspend' >"$RUNDIR/kernel-a1534.txt" || true
+	result state.kernel_log PASS \
+		"$(wc -l <"$RUNDIR/kernel-a1534.txt") A1534/suspend kernel lines captured"
+
+	# The complete codec state FIRST, before the transport probe writes a
+	# single engine register. This is the half that survives a BLOCKED
+	# transport run and is what a before/after pair is compared on.
+	hr "codec state"
+	# Judge the capture by the file, not by the exit code. The tool writes
+	# state.json before it prints its summary, and a crash in the summary
+	# line once made a perfectly good capture read as BLOCKED.
+	"$TOOLS/macbook91-codec-state" capture --card "$CARD" "$RUNDIR/state.json" 2>&1 | tee -a "$REPORT" || true
+	if [ -s "$RUNDIR/state.json" ] && \
+	   python3 -c 'import json,sys; d=json.load(open(sys.argv[1])); sys.exit(0 if d.get("nodes") and not d.get("error") else 1)' \
+	   "$RUNDIR/state.json"; then
+		result state.captured PASS \
+			"$(python3 -c 'import json,sys; d=json.load(open(sys.argv[1])); print("%d nodes, %d fields, %d read errors" % (len(d["nodes"]), d.get("fields",0), d.get("read_errors",0)))' "$RUNDIR/state.json")" m
+	else
+		result state.captured BLOCKED "macbook91-codec-state produced no usable state.json" m
+	fi
+
+	hr "amplifier transport probe"
+	log "This writes only the I2C engine's own registers on widget 0x24 and"
+	log "restores the bridge enable byte-exact. It writes no amplifier register"
+	log "and plays no audio."
+	log ""
+	local out=$RUNDIR/amp-transport.json
+	local rc=0
+	"$TOOLS/macbook91-amp-transport" --card "$CARD" --json "$out" 2>&1 | tee -a "$REPORT" || rc=$?
+	if [ $rc -ne 0 ] || [ ! -s "$out" ]; then
+		result transport.probe BLOCKED "macbook91-amp-transport exited $rc"
+		return
+	fi
+	result transport.probe PASS "probe completed, results in amp-transport.json"
+	# Fold the probe's own per-test results in, so one verdict covers both.
+	while IFS=$'\t' read -r name status detail; do
+		[ -n "$name" ] || continue
+		RESULT_STATUS[$name]=$status
+		RESULT_DETAIL[$name]=$detail
+		case " ${RESULT_ORDER[*]} " in *" $name "*) ;; *) RESULT_ORDER+=("$name") ;; esac
+	done < <(python3 -c '
+import json,sys
+d=json.load(open(sys.argv[1]))
+for k,v in d["tests"].items():
+    print("%s\t%s\t%s" % (k, v["status"], v["detail"]))
+' "$out")
+	hr "identity after the probe"
+	check_identity post-probe || true
+
+	if [ "$WITH_STREAM" = yes ]; then
+		hr "codec state with a stream running (digital silence)"
+		local dev="hw:$CARD,0" used=""
+		start_silence "$dev"
+		sleep 2
+		if [ "$(pcm_state)" = RUNNING ]; then
+			used=$dev
+		else
+			stop_silence
+			log "hw:$CARD,0 did not start (state '$(pcm_state)'); trying the default device"
+			start_silence default
+			sleep 2
+			[ "$(pcm_state)" = RUNNING ] && used=default
+		fi
+		if [ -n "$used" ]; then
+			result stream.running PASS "4ch/44100/S16_LE silence on $used, PCM state RUNNING" m
+			log "--- PCM status ---"
+			cat "/proc/asound/card$CARD/pcm0p/sub0/status" 2>/dev/null >>"$REPORT" || true
+			cat "/proc/asound/card$CARD/pcm0p/sub0/hw_params" 2>/dev/null >>"$REPORT" || true
+			"$TOOLS/macbook91-codec-state" capture --card "$CARD" "$RUNDIR/state-stream.json" \
+				2>&1 | tee -a "$REPORT" || true
+			if [ -s "$RUNDIR/state-stream.json" ]; then
+				result state.captured_streaming PASS "state.json vs state-stream.json shows what starting a stream changes" m
+				log ""
+				log "what starting the stream changed:"
+				"$TOOLS/macbook91-codec-state" diff "$RUNDIR/state.json" \
+					"$RUNDIR/state-stream.json" 2>&1 | tee -a "$REPORT" || true
+			else
+				result state.captured_streaming BLOCKED "capture during playback failed" m
+			fi
+		else
+			result stream.running BLOCKED \
+				"could not start a 4-channel stream; PCM state '$(pcm_state)' - something else holds the device" m
+			result state.captured_streaming NOT_RUN "no stream to capture" m
+		fi
+		stop_silence
+	fi
+
+	hr "codec state after the probe"
+	"$TOOLS/macbook91-codec-state" capture --card "$CARD" "$RUNDIR/state-after-probe.json" \
+		2>&1 | tee -a "$REPORT" || true
+	if [ -s "$RUNDIR/state.json" ] && [ -s "$RUNDIR/state-after-probe.json" ]; then
+		log ""
+		log "what the probe itself changed:"
+		"$TOOLS/macbook91-codec-state" diff "$RUNDIR/state.json" \
+			"$RUNDIR/state-after-probe.json" 2>&1 | tee -a "$REPORT" || true
+	fi
+}
+
+cmd_diff() {
+	local a=$1 b=$2
+	if [ -n "$a" ] && [ -z "$b" ]; then
+		die "diff takes two run ids, or none for the two most recent captures"
+	fi
+	if [ -z "$b" ]; then
+		# Default to the two most recent runs that actually captured state,
+		# which is the before/suspend/after pattern.
+		local recent=()
+		local d
+		for d in $(ls -1 "$RUNS" 2>/dev/null | sort); do
+			[ -s "$RUNS/$d/state.json" ] && recent+=("$d")
+		done
+		[ ${#recent[@]} -ge 2 ] || die "need two runs with a state.json; found ${#recent[@]}"
+		a=${recent[-2]}; b=${recent[-1]}
+		printf 'comparing the two most recent captures\n'
+	fi
+	for x in "$a" "$b"; do
+		[ -s "$RUNS/$x/state.json" ] || die "no state.json in run $x"
+	done
+	printf 'before: %s\nafter:  %s\n\n' "$RUNS/$a" "$RUNS/$b"
+	printf '=== at rest ===\n'
+	"$TOOLS/macbook91-codec-state" diff "$RUNS/$a/state.json" "$RUNS/$b/state.json" || true
+	if [ -s "$RUNS/$a/state-stream.json" ] && [ -s "$RUNS/$b/state-stream.json" ]; then
+		printf '\n=== with a stream running ===\n'
+		"$TOOLS/macbook91-codec-state" diff "$RUNS/$a/state-stream.json" \
+			"$RUNS/$b/state-stream.json" || true
+	else
+		printf '\n(no streaming capture in one or both runs; use probe --with-stream)\n'
+	fi
+}
+
+# Whole seconds spent suspended since boot: CLOCK_BOOTTIME counts suspend,
+# CLOCK_MONOTONIC does not (cmd_wake measures the same difference).
+suspended_seconds() {
+	python3 -c 'import time; print(int(time.clock_gettime(time.CLOCK_BOOTTIME) - time.clock_gettime(time.CLOCK_MONOTONIC)))'
+}
+
+cmd_cycle() {
+	[ "$(id -u)" = 0 ] || die "cycle needs root"
+	if [ "$ALLOW_SUSPEND" != yes ]; then
+		result cycle.gate BLOCKED "refusing to suspend without --allow-suspend and a confirmed test window" m
+		return
+	fi
+	expect cycle.capture_before cycle.capture_after
+	check_identity cycle-before || true
+	"$TOOLS/macbook91-amp-transport" --card "$CARD" --json "$RUNDIR/amp-before.json" \
+		>>"$REPORT" 2>&1 && result cycle.capture_before PASS "state captured before suspend" \
+		|| result cycle.capture_before BLOCKED "capture before suspend failed"
+	log ""
+	log "suspending now. Wake the machine with the power button when you are ready."
+	local slept0 resumed=0
+	slept0=$(suspended_seconds)
+	systemctl suspend
+	# systemctl suspend returns immediately. Wait until the clocks show a
+	# suspend after this point. Time spent suspended does not advance this
+	# loop, so 300 rounds give up after ten awake minutes without one.
+	for _ in $(seq 1 300); do
+		sleep 2
+		if [ "$(suspended_seconds)" -gt "$slept0" ]; then
+			resumed=1; break
+		fi
+	done
+	if [ "$resumed" != 1 ]; then
+		result cycle.resume BLOCKED "no suspend observed within ten minutes of systemctl suspend" m
+		return
+	fi
+	log "resume detected. Capturing the ORIGINAL fault state before anything touches it."
+	check_identity cycle-after || true
+	"$TOOLS/macbook91-amp-transport" --card "$CARD" --json "$RUNDIR/amp-after.json" \
+		>>"$REPORT" 2>&1 && result cycle.capture_after PASS "state captured after resume" \
+		|| result cycle.capture_after BLOCKED "capture after resume failed"
+}
+
+# The headphone jack callback cycles the audio function group through D3/D0
+# (tests/run-tests.sh "7e. Concurrent-capture / jack-power census" - 8 times
+# into D3, 9 into D0 per plug), and on 2026-10-19 a plug stopped a running
+# capture that way (docs/INCIDENT-20261019.md). This starts a real capture and
+# a safe 4-channel playback and has the user plug, then unplug once, each only
+# once the jack reads the opposite state, so headphones that are already in
+# cannot pass as a plug. After each transition it reports whether both streams
+# survived, whether a capture restarted while the codec stays awake records,
+# the capture converters' stream tags, and the AFG/ADC power states. It writes
+# no amplifier register, loads no module, and plays only the same
+# 12%-of-full-scale tone the verifier uses - never speaker-test.
+cmd_jackstream() {
+	[ "$(id -u)" = 0 ] || die "jackstream needs root for the codec power-state capture; run it with sudo"
+	expect regress.concurrent_capture regress.jack_hotplug_stream
+	hr "preflight"
+	check_identity jackstream-before || true
+
+	local hp_numid; hp_numid=$(hp_jack_numid)
+	if [ -z "$hp_numid" ]; then
+		result regress.jack_hotplug_stream BLOCKED "no headphone jack control on this card" m
+		result regress.concurrent_capture BLOCKED "no headphone jack control on this card" m
+		return
+	fi
+
+	hr "starting a capture and a safe playback stream"
+	local capdev="hw:$CARD,0" caperr="$RUNDIR/capture.err"
+	JACKSTREAM_CAPFILE="$RUNDIR/capture.raw"
+	JACKSTREAM_FIFO="$RUNDIR/tone.fifo"
+	local capfile="$JACKSTREAM_CAPFILE"
+	: >"$capfile"
+	rm -f "$JACKSTREAM_FIFO"
+	mkfifo "$JACKSTREAM_FIFO"
+
+	arecord -D "$capdev" -f S16_LE -r 44100 -c 2 -q "$capfile" >"$caperr" 2>&1 &
+	JACKSTREAM_CAP_PID=$!
+	# A FIFO, not a shell pipeline, connects the generator to aplay: a
+	# pipeline's $! only ever names the last stage, so the generator side
+	# would be untrackable and unkillable (see quiet_tone_forever). Two
+	# background jobs on a FIFO give one real PID per process instead.
+	quiet_tone_forever 4 >"$JACKSTREAM_FIFO" &
+	JACKSTREAM_TONE_PID=$!
+	aplay -D "$capdev" -q -f S16_LE -r 44100 -c 4 <"$JACKSTREAM_FIFO" >/dev/null 2>"$RUNDIR/playback.err" &
+	JACKSTREAM_PLAY_PID=$!
+	sleep 2
+
+	if ! kill -0 "$JACKSTREAM_CAP_PID" 2>/dev/null; then
+		result regress.jack_hotplug_stream BLOCKED "capture never started on $capdev: $(cat "$caperr" 2>/dev/null)" m
+		result regress.concurrent_capture BLOCKED "capture never started on $capdev" m
+		stop_jackstream
+		return
+	fi
+	if ! kill -0 "$JACKSTREAM_PLAY_PID" 2>/dev/null; then
+		result regress.jack_hotplug_stream BLOCKED "playback never started on $capdev" m
+		result regress.concurrent_capture BLOCKED "playback never started on $capdev" m
+		stop_jackstream
+		return
+	fi
+	log "capture (pid $JACKSTREAM_CAP_PID) and playback (pid $JACKSTREAM_PLAY_PID) running on $capdev"
+
+	# check_transition NAME PROMPT WANT_JACK -> PASS/FAIL/BLOCKED for the jack,
+	# the running capture, the playback, a capture restarted after the
+	# transition and a codec-state capture; BLOCKED if the jack never moved.
+	check_transition() {
+		local name=$1 prompt=$2 want=$3 seen=0 from sizebefore sizeafter
+		# The jack has to start in the other state, or the poll below passes
+		# at once and nothing is exercised: the runs of 2026-09-15 and
+		# 2026-10-06 read 'on' at the first poll because the headphones were
+		# already in (docs/INCIDENT-20261019.md).
+		from=on
+		[ "$want" = on ] && from=off
+		if [ "$(hp_jack_state)" != "$from" ]; then
+			log ""
+			if [ "$from" = off ]; then
+				log "unplug the headphones first (30s)"
+			else
+				log "plug the headphones in first (30s)"
+			fi
+			for _ in $(seq 1 30); do
+				[ "$(hp_jack_state)" = "$from" ] && break
+				sleep 1
+			done
+			if [ "$(hp_jack_state)" != "$from" ]; then
+				result "$name.jack" BLOCKED "jack never read '$from' before the prompt; no transition to measure" m
+				return
+			fi
+		fi
+		log ""
+		log "$prompt"
+		for _ in $(seq 1 30); do
+			[ "$(hp_jack_state)" = "$want" ] && { seen=1; break; }
+			sleep 1
+		done
+		if [ "$seen" != 1 ]; then
+			result "$name.jack" BLOCKED "jack never reported '$want' within 30s" m
+			return
+		fi
+		result "$name.jack" PASS "jack went '$from' -> '$want'"
+
+		sizebefore=$(stat -c %s "$capfile" 2>/dev/null || echo 0)
+		sleep 3
+		sizeafter=$(stat -c %s "$capfile" 2>/dev/null || echo 0)
+
+		local capok=PASS capdetail="alive, grew ${sizebefore}->${sizeafter} bytes"
+		if ! kill -0 "$JACKSTREAM_CAP_PID" 2>/dev/null; then
+			capok=FAIL; capdetail="capture process died: $(tail -3 "$caperr" 2>/dev/null)"
+		elif [ "$sizeafter" -le "$sizebefore" ]; then
+			capok=FAIL; capdetail="no growth (${sizebefore}->${sizeafter}) - short read or stall"
+		elif grep -qiE 'overrun|broken pipe|EPIPE|xrun' "$caperr" 2>/dev/null; then
+			capok=FAIL; capdetail="$(grep -iE 'overrun|broken pipe|EPIPE|xrun' "$caperr" | tail -1)"
+		fi
+		result "$name.capture" "$capok" "$capdetail; ADC $(adc_stream_tags)" m
+
+		local playok=PASS playdetail="alive"
+		if ! kill -0 "$JACKSTREAM_PLAY_PID" 2>/dev/null; then
+			playok=FAIL; playdetail="playback process died"
+		fi
+		result "$name.playback" "$playok" "$playdetail" m
+
+		# A capture opened after the transition while the playback keeps the
+		# codec awake: what a call application does after an error. The core
+		# skips converter writes it believes are in place, so this fails on
+		# its own when the replay reset the converter
+		# (docs/INCIDENT-20261019.md). It runs on into the next transition.
+		kill "$JACKSTREAM_CAP_PID" 2>/dev/null || true
+		wait "$JACKSTREAM_CAP_PID" 2>/dev/null || true
+		: >"$capfile"
+		arecord -D "$capdev" -f S16_LE -r 44100 -c 2 -q "$capfile" >"$caperr" 2>&1 &
+		JACKSTREAM_CAP_PID=$!
+		sleep 1
+		sizebefore=$(stat -c %s "$capfile" 2>/dev/null || echo 0)
+		sleep 3
+		sizeafter=$(stat -c %s "$capfile" 2>/dev/null || echo 0)
+		local restok=PASS restdetail="restarted capture grew ${sizebefore}->${sizeafter} bytes"
+		if ! kill -0 "$JACKSTREAM_CAP_PID" 2>/dev/null; then
+			restok=FAIL; restdetail="restarted capture died: $(tail -3 "$caperr" 2>/dev/null)"
+		elif [ "$sizeafter" -le "$sizebefore" ]; then
+			restok=FAIL; restdetail="restarted capture did not grow (${sizebefore}->${sizeafter})"
+		fi
+		result "$name.capture_restart" "$restok" "$restdetail; ADC $(adc_stream_tags)" m
+
+		"$TOOLS/macbook91-codec-state" capture --card "$CARD" "$RUNDIR/state-$name.json" \
+			>>"$REPORT" 2>&1 || true
+		result "$name.power" PASS "$(afg_adc_power "$RUNDIR/state-$name.json")"
+	}
+
+	check_transition jackstream.plug   "plug the headphones now" on
+	check_transition jackstream.unplug "now unplug the headphones" off
+
+	# Stops capture/tone/playback and removes capture.raw and the FIFO; see
+	# stop_jackstream. No recording survives a completed run either.
+	stop_jackstream
+
+	# Roll the sub-results of both transitions into the two named gates
+	# run-tests.sh §8 declares BLOCKED pending this run.
+	# FAIL only on a measured failure; a transition that could not be
+	# measured (jack never moved, result missing) makes the gate BLOCKED.
+	rollup() {
+		local st=PASS n s
+		for n in "$@"; do
+			s=${RESULT_STATUS[$n]:-NOT_RUN}
+			case $s in
+			PASS) ;;
+			FAIL) st=FAIL ;;
+			*) [ "$st" = FAIL ] || st=BLOCKED ;;
+			esac
+		done
+		printf '%s' "$st"
+	}
+	local capture_ok stream_ok
+	capture_ok=$(rollup jackstream.plug.capture jackstream.unplug.capture \
+	                    jackstream.plug.capture_restart jackstream.unplug.capture_restart)
+	stream_ok=$(rollup jackstream.plug.playback jackstream.unplug.playback \
+	                   jackstream.plug.jack jackstream.unplug.jack)
+	result regress.concurrent_capture "$capture_ok" \
+		"capture across and after both transitions: $capture_ok" m
+	result regress.jack_hotplug_stream "$stream_ok" \
+		"jack detection and playback across both transitions: $stream_ok" m
+}
+
+cmd_wake() {
+	expect wake.measured
+	hr "wake sources as found"
+	grep -v '^Device' /proc/acpi/wakeup | tee -a "$REPORT"
+	# Which GPE belongs to which device is in the DSDT, and the DSDT is
+	# root-only. When we already have root, read it: it turns the bisection
+	# into a lookup.
+	if [ "$(id -u)" = 0 ] && [ -r /sys/firmware/acpi/tables/DSDT ]; then
+		hr "GPE to device map, from the DSDT _PRW objects"
+		"$TOOLS/macbook91-wake-probe" prw 2>&1 | tee -a "$REPORT" \
+			| tee "$RUNDIR/prw-map.txt" >/dev/null
+		cat "$RUNDIR/prw-map.txt" 2>/dev/null || true
+	fi
+
+	if [ -n "$DISARM" ]; then
+		[ "$(id -u)" = 0 ] || die "--disarm needs root to write /proc/acpi/wakeup"
+		hr "disarming: $DISARM"
+		acpi_wake_disarm "$DISARM"
+	fi
+	hr "one suspend cycle, measured"
+	log "This suspends the machine. Wake it with the power button or the lid if"
+	log "it does not come back on its own."
+	log ""
+	local rc=0
+	"$TOOLS/macbook91-wake-probe" cycle "$RUNDIR" 2>&1 | tee -a "$REPORT" || rc=$?
+	if [ -s "$RUNDIR/wake-after.json" ]; then
+		local slept
+		slept=$(python3 -c '
+import json,sys
+a=json.load(open(sys.argv[1])); b=json.load(open(sys.argv[2]))
+print("%.1f" % ((b["clocks"]["boottime"]-a["clocks"]["boottime"])
+                -(b["clocks"]["monotonic"]-a["clocks"]["monotonic"])))
+' "$RUNDIR/wake-before.json" "$RUNDIR/wake-after.json")
+		if python3 -c "import sys; sys.exit(0 if float(sys.argv[1])>60 else 1)" "$slept"; then
+			result wake.measured PASS "stayed suspended ${slept}s - nothing woke it early" m
+		elif python3 -c "import sys; sys.exit(0 if float(sys.argv[1])>0.5 else 1)" "$slept"; then
+			result wake.measured FAIL "came back after ${slept}s - something woke it" m
+		else
+			result wake.measured BLOCKED "no suspend happened at all" m
+		fi
+	else
+		result wake.measured BLOCKED "macbook91-wake-probe produced no measurement (exit $rc)" m
+	fi
+	hr "codec state after the wake cycle"
+	check_identity post-wake || true
+}
+
+cmd_report() {
+	local id=${1:-$(ls -1 "$RUNS" 2>/dev/null | tail -1)}
+	[ -n "$id" ] || die "no runs recorded under $RUNS"
+	local d=$RUNS/$id
+	[ -d "$d" ] || die "no such run: $id"
+	cat "$d/report.txt"
+	printf '\nrun directory: %s\n' "$d"
+}
+
+# ---------------------------------------------------------------- main
+
+COMMAND=${1:-}
+shift || true
+case $COMMAND in
+	selfcheck|preflight|probe|cycle|wake|jackstream) ;;
+	report|diff) : ;;
+	-h|--help|"") sed -n '2,39p' "$SELF" | sed 's/^# \{0,1\}//' ; exit 0 ;;
+	*) die "unknown command '$COMMAND'" ;;
+esac
+
+CARD_OVERRIDE=""
+while [ $# -gt 0 ]; do
+	case $1 in
+	--allow-suspend) ALLOW_SUSPEND=yes ;;
+	--with-stream) WITH_STREAM=yes ;;
+	--disarm) [ $# -ge 2 ] || die "--disarm needs a list of wake source names"
+	          DISARM=$2; shift ;;
+	--card)   [ $# -ge 2 ] || die "--card needs a card number"
+	          CARD_OVERRIDE=$2; shift
+	          case $CARD_OVERRIDE in ''|*[!0-9]*) die "--card needs a card number, got '$CARD_OVERRIDE'" ;; esac ;;
+	-*) die "unknown option '$1' (see --help)" ;;
+	*) break ;;
+	esac
+	shift
+done
+
+if [ "$COMMAND" = report ]; then
+	cmd_report "${1:-}"
+	exit 0
+fi
+
+if [ "$COMMAND" = diff ]; then
+	cmd_diff "${1:-}" "${2:-}"
+	exit $?
+fi
+[ $# -eq 0 ] || die "unexpected argument '$1' for $COMMAND"
+
+RUNID=$(date -u +%Y%m%dT%H%M%SZ)-$$
+RUNDIR=$RUNS/$RUNID
+mkdir -p "$RUNDIR"
+REPORT=$RUNDIR/report.txt
+RESULTS=$RUNDIR/results.json
+: >"$REPORT"
+if [ -n "${SUDO_USER:-}" ]; then
+	chown -R "$SUDO_USER" "$STATE_ROOT" 2>/dev/null || true
+fi
+
+trap on_exit EXIT INT TERM
+
+log "macbook91-runner $VERSION  command=$COMMAND  run=$RUNID"
+log "run directory: $RUNDIR"
+log "wall $(date -u +%Y-%m-%dT%H:%M:%SZ)  monotonic $(cut -d' ' -f1 /proc/uptime)s"
+
+case $COMMAND in
+selfcheck) cmd_selfcheck ;;
+preflight) cmd_preflight ;;
+probe)     cmd_probe ;;
+cycle)     cmd_cycle ;;
+wake)      cmd_wake ;;
+jackstream) cmd_jackstream ;;
+esac
+
+V=$(verdict)
+hr "verdict: $V"
+for n in "${RESULT_ORDER[@]}"; do
+	printf '%-38s %s\n' "$n" "${RESULT_STATUS[$n]}"
+done | tee -a "$REPORT"
+log ""
+log "machine-readable results: $RESULTS"
+[ -n "${SUDO_USER:-}" ] && chown -R "$SUDO_USER" "$STATE_ROOT" 2>/dev/null || true
+
+trap - EXIT INT TERM
+# The same restores on_exit runs; a completed run must not leave wake
+# sources disarmed either.
+acpi_wake_restore || true
+restore_units || true
+write_results
+exit "$(exit_code_for "$V")"

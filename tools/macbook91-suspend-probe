@@ -1,0 +1,129 @@
+#!/usr/bin/env bash
+# SPDX-License-Identifier: GPL-3.0-or-later
+#
+# SUPERSEDED — use macbook91-runner cycle (a full suspend/resume capture) or
+# macbook91-runner jackstream (concurrent-capture / jack-power during a
+# stream). Kept as evidence of what was run; nothing new should be added here.
+#
+# macbook91-suspend-probe — capture audio state before a suspend and after the
+# resume, then diff them.
+#
+# The point is to record the healthy state and the broken state *before*
+# anything tries to reinitialise, so the difference is evidence rather than
+# guesswork.
+#
+# Everything here is read-only: it never loads or unloads a module, never
+# changes a mixer level or PipeWire setting, and never plays sound.
+#
+#   macbook91-suspend-probe            capture, wait for you to suspend/resume
+#   macbook91-suspend-probe --suspend  same, but run `systemctl suspend` for you
+#
+set -u
+
+CARD=0
+OUT="${TMPDIR:-/tmp}/macbook91-suspend-$(date -u +%Y%m%dT%H%M%SZ)"
+DO_SUSPEND=0
+[ "${1:-}" = "--suspend" ] && DO_SUSPEND=1
+
+have() { command -v "$1" >/dev/null 2>&1; }
+
+# Snapshot everything that could plausibly change across a sleep.
+snap() {
+	local d="$1"
+	mkdir -p "$d"
+
+	# Codec state: GPIO, the speaker pin, the speaker converter, power states.
+	if [ -r "/proc/asound/card$CARD/codec#0" ]; then
+		cp "/proc/asound/card$CARD/codec#0" "$d/codec-full.txt" 2>/dev/null
+		sed -n '/^GPIO:/,/GPO\[1\]/p' "$d/codec-full.txt" > "$d/gpio.txt"
+		sed -n '/^Node 0x0a /,/^Node 0x0b /p' "$d/codec-full.txt" > "$d/converter-0x0a.txt"
+		sed -n '/^Node 0x1d /,/^Node 0x1e /p' "$d/codec-full.txt" > "$d/pin-0x1d.txt"
+		sed -n '/^Node 0x10 /,/^Node 0x11 /p' "$d/codec-full.txt" > "$d/pin-0x10-hp.txt"
+		grep -E '^  Power: setting=' "$d/codec-full.txt" > "$d/power-states.txt"
+	fi
+
+	# Module identity and ALSA/PipeWire exposure.
+	cat "/sys/module/snd_hda_codec_cs420x/version" > "$d/module-version.txt" 2>/dev/null
+	amixer -c "$CARD" contents > "$d/mixer.txt" 2>&1
+	aplay -l                   > "$d/aplay.txt"  2>&1
+	cat "/proc/asound/card$CARD/pcm0p/sub0/hw_params" > "$d/hw_params.txt" 2>&1
+	have wpctl && wpctl status > "$d/wpctl.txt" 2>&1
+	amixer -c "$CARD" cget numid=12 2>/dev/null \
+		| sed -n 's/^ *: values=//p' > "$d/headphone-jack.txt"
+
+	# Runtime PM: a codec stuck resuming is a different fault from a codec
+	# that resumed into a wrong state.
+	for f in /sys/bus/pci/drivers/snd_hda_intel/0000:*/power/runtime_status; do
+		[ -r "$f" ] && { printf '%s: ' "$f"; cat "$f"; }
+	done > "$d/runtime-pm.txt" 2>&1
+	ps -eo pid,stat,wchan:20,cmd --no-headers 2>/dev/null \
+		| awk '$2 ~ /D/' > "$d/d-state-processes.txt"
+}
+
+report_diff() {
+	local a="$1" b="$2" name="$3" file="$4"
+	if [ ! -r "$a/$file" ] || [ ! -r "$b/$file" ]; then
+		printf '  %-26s (not captured)\n' "$name"; return
+	fi
+	if diff -q "$a/$file" "$b/$file" >/dev/null 2>&1; then
+		printf '  %-26s unchanged\n' "$name"
+	else
+		printf '  %-26s CHANGED\n' "$name"
+		diff -u "$a/$file" "$b/$file" 2>/dev/null \
+			| grep -E '^[-+][^-+]' | head -12 | sed 's/^/      /'
+	fi
+}
+
+printf '\nMacBook9,1 suspend/resume probe\n\n'
+printf '  Nothing here changes any setting or plays sound.\n'
+printf '  Output directory: %s\n\n' "$OUT"
+
+printf '  Capturing state BEFORE suspend ...\n'
+snap "$OUT/before"
+printf '    module: %s\n' "$(cat "$OUT/before/module-version.txt" 2>/dev/null || echo 'stock/unknown')"
+printf '    GPIO:   %s\n' "$(sed -n 's/^  IO\[\([0-5]\)\]: enable=\([01]\).*/\1:\2/p' "$OUT/before/gpio.txt" 2>/dev/null | tr '\n' ' ')"
+printf '\n'
+
+if [ "$DO_SUSPEND" = 1 ]; then
+	printf '  Suspending now. Wake the machine when ready, then come back here.\n\n'
+	sleep 2
+	systemctl suspend
+else
+	printf '  Now suspend the machine (close the lid, or `systemctl suspend`),\n'
+	printf '  wake it again, and come back to this terminal.\n\n'
+fi
+
+printf '  Press Enter once the machine has resumed ... '
+read -r _ || true
+
+printf '\n  Capturing state AFTER resume ...\n\n'
+snap "$OUT/after"
+
+printf '  What changed across the sleep\n\n'
+report_diff "$OUT/before" "$OUT/after" "GPIO (amp supply)"      gpio.txt
+report_diff "$OUT/before" "$OUT/after" "converter 0x0a"         converter-0x0a.txt
+report_diff "$OUT/before" "$OUT/after" "speaker pin 0x1d"       pin-0x1d.txt
+report_diff "$OUT/before" "$OUT/after" "headphone pin 0x10"     pin-0x10-hp.txt
+report_diff "$OUT/before" "$OUT/after" "widget power states"    power-states.txt
+report_diff "$OUT/before" "$OUT/after" "module version"         module-version.txt
+report_diff "$OUT/before" "$OUT/after" "ALSA playback devices"  aplay.txt
+report_diff "$OUT/before" "$OUT/after" "headphone jack"         headphone-jack.txt
+report_diff "$OUT/before" "$OUT/after" "PipeWire graph"         wpctl.txt
+report_diff "$OUT/before" "$OUT/after" "runtime PM"             runtime-pm.txt
+
+printf '\n  Stuck (uninterruptible) processes after resume: %s\n' \
+	"$(wc -l < "$OUT/after/d-state-processes.txt" 2>/dev/null || echo 0)"
+
+# Kernel log around the resume: the driver's own markers plus anything ALSA
+# complained about. Audio lines only, never a full journal.
+journalctl -b -k --no-pager -o short-precise 2>/dev/null \
+	| grep -Ei 'snd[_-]|hda|cs420|cs4208|A1534|PM: |suspend|resume' \
+	| tail -120 > "$OUT/kernel-resume.txt"
+printf '  Kernel audio/PM lines around the resume saved.\n'
+printf '  Driver markers seen: %s\n' \
+	"$(grep -c 'A1534' "$OUT/kernel-resume.txt" 2>/dev/null || echo 0)"
+
+ARCHIVE="$OUT.tar.zst"
+tar -C "$(dirname "$OUT")" -caf "$ARCHIVE" "$(basename "$OUT")" 2>/dev/null && rm -rf "$OUT"
+printf '\n  Full evidence: %s\n' "$ARCHIVE"
+printf '  It contains no audio recording and no credentials.\n\n'

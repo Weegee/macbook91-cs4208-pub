@@ -1,0 +1,884 @@
+#!/usr/bin/env bash
+# SPDX-License-Identifier: GPL-3.0-or-later
+#
+# macbook91-audio-verify — one guided check of MacBook9,1 (A1534) audio.
+#
+# Runs the software gates first and only asks the user anything once the
+# software evidence says a question is worth asking. Returns a single
+# PASS/FAIL. On failure it writes exactly one redacted diagnostic archive.
+#
+# It never records audio to the archive, never changes mixer levels
+# permanently, never alters PipeWire/WirePlumber policy, and never touches the
+# suspend mode.
+#
+set -u
+# NOTE: deliberately NOT `set -o pipefail`. Checks here are of the form
+# `producer | grep -q PATTERN`; grep -q exits on the first match and SIGPIPEs
+# the producer, so under pipefail the pipeline reports 141 and a successful
+# match reads as a failure. That bug produced two false FAILs on the first
+# real run. Use contains() below rather than testing a pipeline directly.
+
+# Two names, deliberately. PKG is the runtime identity - the DKMS module, the
+# WirePlumber drop-in, /usr/share/<PKG>/acp, /var/lib/dkms/<PKG> and the user's
+# own diagnostics directory - and it did not change when the package was
+# renamed. PACMAN_PKG is the pacman package, which was renamed. Querying the old name still works on a machine
+# that has not taken the upgrade yet.
+PKG=macbook91-cs4208
+PACMAN_PKG=macbook91-cs4208-dkms
+# Cold-boot codec subsystem id, and the CS4208's own vendor/device id that
+# replaces it once firmware state has been lost to a deep suspend. Both are
+# accepted here for the same reason a1534_match() in a1534_match.h accepts
+# both: the degraded value says the SSID is unavailable, not that this is a
+# different codec, and it is identity, not function - never a FAIL.
+CODEC_SSID_WANT=106b6500
+CODEC_SSID_DEGRADED=10134208
+DMI_PRODUCT_WANT="MacBook9,1"
+SPEAKER_DAC=0x0a
+SPEAKER_PIN=0x1d
+HP_PIN=0x10
+# Headphones are far more sensitive than the small internal speakers: their
+# check tone is 3% of full scale, a quarter of the speaker tone.
+HP_TONE_AMP=0.03
+
+# The one ACP profile this card can actually open: the internal PCM accepts
+# exactly S16_LE / 44100 / 4 channels, which only a four-channel mapping
+# satisfies. Both the speakers and the headphone jack are served through it,
+# because the driver - not the session manager - switches converters.
+ANALOG_PROFILE=analog-surround-40
+WP_DROPIN=/usr/share/wireplumber/wireplumber.conf.d/51-$PKG.conf
+
+# A private, unpredictable scratch directory for anything this run writes
+# temporarily (the microphone recording, the diagnostic archive staging area).
+# Removed on any exit, including Ctrl-C - the file header's "never archives
+# audio" promise must hold under interruption, not just on the happy path.
+# The same trap stops the capture the headphone step keeps running across the
+# plug (start_bg_capture); it writes to /dev/null, so nothing is recorded.
+RUNTMP=$(mktemp -d)
+trap '[ -z "${BG_CAP_PID:-}" ] || kill "$BG_CAP_PID" 2>/dev/null; rm -rf "$RUNTMP"' EXIT
+# A trap on INT or TERM that only cleans up lets bash carry on with the next
+# command. End the run instead; the EXIT trap above then removes $RUNTMP.
+trap 'exit 130' INT
+trap 'exit 143' TERM
+
+ASSUME_YES=0
+NO_SOUND=0
+for a in "$@"; do
+	case "$a" in
+		--yes) ASSUME_YES=1 ;;
+		--no-sound) NO_SOUND=1 ;;
+		-h|--help)
+			sed -n '2,12p' "$0"; exit 0 ;;
+		*) printf 'unknown argument: %s\n' "$a" >&2; exit 2 ;;
+	esac
+done
+
+# --- output -----------------------------------------------------------------
+
+if [ -t 1 ] && [ -z "${NO_COLOR:-}" ]; then
+	C_OK=$'\033[32m'; C_NO=$'\033[31m'; C_SK=$'\033[33m'; C_0=$'\033[0m'
+else
+	C_OK=; C_NO=; C_SK=; C_0=
+fi
+
+FAILED=0
+declare -a RESULTS
+
+emit() { # emit STATUS NAME DETAIL
+	local st="$1" name="$2" detail="${3:-}"
+	local col="$C_SK"
+	case "$st" in
+		PASS) col="$C_OK" ;;
+		FAIL) col="$C_NO"; FAILED=1 ;;
+	esac
+	printf '  %s%-7s%s %-42s %s\n' "$col" "$st" "$C_0" "$name" "$detail"
+	RESULTS+=("$st|$name|$detail")
+}
+
+section() { printf '\n%s\n' "$1"; }
+
+ask() { # ask QUESTION -> 0 yes / 1 no
+	local q="$1" reply
+	if [ "$ASSUME_YES" = 1 ]; then
+		printf '  ?       %s [auto-yes]\n' "$q"; return 0
+	fi
+	if [ ! -t 0 ]; then
+		return 2	# no terminal: caller records SKIPPED
+	fi
+	while true; do
+		printf '  ?       %s [y/n] ' "$q"
+		read -r reply || return 2
+		case "$reply" in
+			[yYjJ]*) return 0 ;;
+			[nN]*)   return 1 ;;
+		esac
+	done
+}
+
+have() { command -v "$1" >/dev/null 2>&1; }
+
+# contains HAYSTACK PATTERN : grep the captured text, never a live pipeline.
+contains() { printf '%s' "$1" | grep -q -- "$2"; }
+
+# Headphone jack presence, from the ALSA jack control rather than from the
+# pin's static Pin-ctls. Verified on the test machine: off unplugged, on plugged.
+# A short, quiet 440 Hz tone with a 50 ms fade at each end, so the amplifiers
+# are never hit with a step. 12% of full scale unless a lower level is passed: the speaker path has no
+# hardware attenuation, so the test tone must be conservative by construction.
+gen_quiet_tone() {
+	python3 - "$1" ${2:+"$2"} <<'PYTONE'
+import math, struct, sys
+ch, rate, secs, amp = int(sys.argv[1]), 44100, 2, 0.12
+if len(sys.argv) > 2:
+    amp = float(sys.argv[2])
+n = rate * secs
+out = bytearray()
+for i in range(n):
+    env = min(1.0, i / (rate * 0.05), (n - i) / (rate * 0.05))
+    v = int(amp * env * 32767 * math.sin(2 * math.pi * 440 * i / rate))
+    out += struct.pack('<' + 'h' * ch, *([v] * ch))
+try:
+    sys.stdout.buffer.write(bytes(out))
+    sys.stdout.buffer.flush()
+except BrokenPipeError:
+    # aplay exited before reading the tone - typically the device was still
+    # held by the audio server, and the caller retries. Not an error here,
+    # and printing a traceback in the middle of a listening test is noise.
+    sys.exit(0)
+PYTONE
+}
+
+# play_quiet_tone [AMP]: play the quiet tone on $PCM_HW, 4 channels, at AMP
+# of full scale (default: the speaker level above). Sets TONE_ERR; returns 0
+# once the tone has played.
+play_quiet_tone() {
+	TONE_ERR=""
+	if ! have aplay || ! have python3; then
+		TONE_ERR="alsa-utils or python3 not installed"
+		return 1
+	fi
+	# Deliberately NOT speaker-test: it emits a near full-scale sine, and
+	# this speaker path has no hardware volume control at all, so full scale
+	# is loud enough to risk the small internal speakers.
+	#
+	# Wait for PipeWire to release the device; it suspends idle nodes after a
+	# few seconds. Without this the open fails with EBUSY and no tone is ever
+	# produced.
+	for _ in 1 2 3 4 5 6 7 8 9 10; do
+		TONE_ERR=$(gen_quiet_tone 4 ${1:+"$1"} | timeout 8 aplay -q -D "$PCM_HW" \
+			-f S16_LE -r 44100 -c 4 2>&1 >/dev/null) && return 0
+		case "$TONE_ERR" in
+			*[Bb]usy*|*EBUSY*|*belegt*) sleep 1; continue ;;
+			*) return 1 ;;
+		esac
+	done
+	return 1
+}
+
+# The headphone jack control's numid is not stable across kernels/cards, so
+# look it up by name each time rather than hardcoding a fixed control number.
+hp_jack_numid() {
+	amixer -c "${CARD:-0}" controls 2>/dev/null \
+		| grep -i "'Headphone.*Jack'" | head -1 \
+		| sed -n "s/^numid=\([0-9]*\).*/\1/p"
+}
+
+jack_state() {
+	local numid
+	numid=$(hp_jack_numid)
+	[ -n "$numid" ] || return 1
+	amixer -c "${CARD:-0}" cget "numid=$numid" 2>/dev/null \
+		| sed -n 's/^ *: values=//p' | head -1
+}
+
+# wait_jack_state STATE SECONDS -> 0 once the jack reads STATE.
+wait_jack_state() {
+	for _ in $(seq 1 "$2"); do
+		[ "$(jack_state)" = "$1" ] && return 0
+		sleep 1
+	done
+	[ "$(jack_state)" = "$1" ]
+}
+
+# A capture to /dev/null kept running while the headphones go in or out:
+# nothing is recorded, only its progress is read. -d ends it on its own if the
+# run is cut short. Sets BG_CAP_PID, or BG_CAP_ERR when it could not start.
+BG_CAP_PID=""
+BG_CAP_ERR=""
+start_bg_capture() {
+	BG_CAP_ERR=""
+	for _ in 1 2 3 4 5 6 7 8 9 10; do
+		arecord -D "hw:${CARD},0" -q -f S16_LE -r 48000 -c 2 -d 45 -t raw /dev/null \
+			2>"$RUNTMP/bgcap.err" &
+		BG_CAP_PID=$!
+		sleep 1
+		kill -0 "$BG_CAP_PID" 2>/dev/null && return 0
+		wait "$BG_CAP_PID" 2>/dev/null
+		BG_CAP_PID=""
+		BG_CAP_ERR=$(cat "$RUNTMP/bgcap.err" 2>/dev/null)
+		case "$BG_CAP_ERR" in
+			*[Bb]usy*|*EBUSY*|*belegt*) continue ;;
+			*) return 1 ;;
+		esac
+	done
+	return 1
+}
+
+stop_bg_capture() {
+	[ -n "$BG_CAP_PID" ] || return 0
+	kill "$BG_CAP_PID" 2>/dev/null
+	wait "$BG_CAP_PID" 2>/dev/null
+	BG_CAP_PID=""
+}
+
+# bg_capture_check NAME: PASS when the background capture still runs and its
+# hardware pointer advances over one second (docs/INCIDENT-20261019.md: a plug
+# once stopped a running capture).
+bg_capture_check() {
+	local name=$1 a b st="/proc/asound/card${CARD}/pcm0c/sub0/status"
+	sleep 2
+	if ! kill -0 "$BG_CAP_PID" 2>/dev/null; then
+		emit FAIL "$name" "the capture stopped: $(tail -1 "$RUNTMP/bgcap.err" 2>/dev/null)"
+		return
+	fi
+	a=$(sed -n 's/^hw_ptr *: //p' "$st" 2>/dev/null)
+	sleep 1
+	b=$(sed -n 's/^hw_ptr *: //p' "$st" 2>/dev/null)
+	if [ -n "$a" ] && [ -n "$b" ] && [ "$b" -gt "$a" ]; then
+		emit PASS "$name" "hw_ptr $a -> $b"
+	else
+		emit FAIL "$name" "the capture is open but not advancing (hw_ptr ${a:-?} -> ${b:-?})"
+	fi
+}
+contains_i() { printf '%s' "$1" | grep -qi -- "$2"; }
+
+# Kernel log for the current boot, captured once. Empty when unreadable.
+kernel_log() {
+	local out
+	# -q: without it an unreadable journal prints "-- No entries --" on stdout.
+	out=$(journalctl -b -k -q --no-pager 2>/dev/null) || out=""
+	[ -n "$out" ] || out=$(dmesg 2>/dev/null) || out=""
+	printf '%s' "$out"
+}
+
+# --- 1. machine identity ----------------------------------------------------
+
+section "1. Machine"
+
+# Running under sudo is neither needed nor helpful: every check here works
+# unprivileged, while root loses the user's PipeWire session, so the sink,
+# tone, microphone and headphone checks all get skipped.
+if [ "$(id -u)" = 0 ]; then
+	printf '  %sNOTE%s    running as root - PipeWire and the listening checks will be\n' "$C_SK" "$C_0"
+	printf '          skipped. Re-run as your normal user (no sudo) for a full check.\n\n'
+fi
+
+DMI_VENDOR=$(cat /sys/class/dmi/id/sys_vendor 2>/dev/null || echo '')
+DMI_PRODUCT=$(cat /sys/class/dmi/id/product_name 2>/dev/null || echo '')
+if [ "$DMI_VENDOR" = "Apple Inc." ] && [ "$DMI_PRODUCT" = "$DMI_PRODUCT_WANT" ]; then
+	emit PASS "DMI identity" "$DMI_VENDOR / $DMI_PRODUCT"
+else
+	emit FAIL "DMI identity" "got '$DMI_VENDOR / $DMI_PRODUCT', want 'Apple Inc. / $DMI_PRODUCT_WANT'"
+fi
+
+KVER=$(uname -r)
+emit PASS "running kernel" "$KVER"
+
+# --- 2. codec ---------------------------------------------------------------
+
+section "2. Codec"
+
+CODEC_FILE=""
+for c in /proc/asound/card*/codec#*; do
+	[ -r "$c" ] || continue
+	if grep -q '^Vendor Id: 0x10134208' "$c"; then CODEC_FILE="$c"; break; fi
+done
+
+if [ -n "$CODEC_FILE" ]; then
+	emit PASS "CS4208 codec present" "$CODEC_FILE"
+	SSID=$(sed -n 's/^Subsystem Id: 0x//p' "$CODEC_FILE" | head -1)
+	if [ "$SSID" = "$CODEC_SSID_WANT" ]; then
+		emit PASS "codec subsystem id" "0x$SSID"
+	elif [ "$SSID" = "$CODEC_SSID_DEGRADED" ]; then
+		emit PASS "codec subsystem id" \
+		     "0x$SSID - the subsystem id was lost to a suspend; this is identity, not function"
+	else
+		emit FAIL "codec subsystem id" "got 0x$SSID, want 0x$CODEC_SSID_WANT or 0x$CODEC_SSID_DEGRADED"
+	fi
+else
+	emit FAIL "CS4208 codec present" "no codec with vendor id 0x10134208"
+fi
+
+# --- 3. module identity -----------------------------------------------------
+
+section "3. Module"
+
+SYSMOD=/sys/module/snd_hda_codec_cs420x
+if [ -d "$SYSMOD" ]; then
+	emit PASS "codec module loaded" "snd_hda_codec_cs420x"
+	# The LOADED module's version, not modinfo's view of the file on disk.
+	LOADED_VER=$(cat "$SYSMOD/version" 2>/dev/null || echo '')
+	if [ -n "$LOADED_VER" ]; then
+		emit PASS "loaded module source identity" "$LOADED_VER"
+	else
+		emit FAIL "loaded module source identity" \
+		     "no version attribute: the loaded module is the stock in-tree codec, not $PKG"
+	fi
+	DISK_VER=$(modinfo -F version snd-hda-codec-cs420x 2>/dev/null || echo '')
+	# The part after '+' is a hash of the actual sources, so it is what
+	# decides whether the running code differs. A package-only version bump
+	# changes the prefix while the built module is byte-identical, and
+	# demanding a reboot for that is noise.
+	LOADED_SRC=${LOADED_VER#*+}
+	DISK_SRC=${DISK_VER#*+}
+	if [ -z "$LOADED_VER" ] || [ -z "$DISK_VER" ]; then
+		:
+	elif [ "$LOADED_SRC" != "$DISK_SRC" ]; then
+		emit FAIL "loaded vs on-disk module" \
+		     "loaded $LOADED_VER but disk has $DISK_VER - reboot needed to load the new module"
+	elif [ "$LOADED_VER" != "$DISK_VER" ]; then
+		emit PASS "loaded vs on-disk module" \
+		     "same code ($LOADED_SRC); package version differs ($LOADED_VER -> $DISK_VER), no reboot needed"
+	else
+		emit PASS "loaded vs on-disk module" "match"
+	fi
+else
+	emit FAIL "codec module loaded" "snd_hda_codec_cs420x is not loaded"
+fi
+
+if have dkms; then
+	# One line per kernel; judge the running one, not whichever sorts first.
+	DKMS_LINE=$(dkms status 2>/dev/null \
+		| awk -v p="$PKG/" -v k=", $KVER, " 'index($0, p) == 1 && index($0, k) { print; exit }')
+	if [ -n "$DKMS_LINE" ]; then
+		case "$DKMS_LINE" in
+			*installed*) emit PASS "DKMS status" "$DKMS_LINE" ;;
+			*)           emit FAIL "DKMS status" "$DKMS_LINE" ;;
+		esac
+	else
+		emit FAIL "DKMS status" "$PKG has no DKMS entry for the running kernel $KVER"
+	fi
+else
+	emit SKIPPED "DKMS status" "dkms not installed"
+fi
+
+# --- 4. A1534 path selected and initialised ---------------------------------
+
+section "4. A1534 path"
+
+# Primary proof is hardware state, not the log: only this driver's
+# build_pcms binds a PCM to the digital speaker converter 0x0a. The stock
+# in-tree codec leaves 0x0a with no Device: binding at all. This works
+# without root, unlike reading the kernel journal.
+if [ -n "$CODEC_FILE" ]; then
+	CVT_BLOCK=$(sed -n "/^Node $SPEAKER_DAC /,/^Node 0x0b /p" "$CODEC_FILE")
+	if contains "$CVT_BLOCK" 'Device: name='; then
+		emit PASS "speaker PCM bound to converter $SPEAKER_DAC" \
+		     "$(printf '%s' "$CVT_BLOCK" | sed -n 's/.*Device: name=\("[^"]*"\).*/\1/p' | head -1)"
+	else
+		emit FAIL "speaker PCM bound to converter $SPEAKER_DAC" \
+		     "no PCM on $SPEAKER_DAC - the generic path is in use, speakers cannot receive audio"
+	fi
+
+	# A deep suspend powers this codec down and loses configuration the
+	# driver cannot reproduce - proven by measurement, including a full
+	# re-probe. Detect that state by name rather than letting it surface as
+	# an unexplained "no sound", which is what it looked like for several
+	# rounds of diagnosis.
+	PIN1D_CFG=$(sed -n "/^Node $SPEAKER_PIN /,/^Node 0x1e /p" "$CODEC_FILE" 2>/dev/null \
+		| sed -n 's/^  Pin Default \(0x[0-9a-f]*\).*/\1/p')
+	if [ "$PIN1D_CFG" = "0x901600f0" ]; then
+		emit FAIL "speaker configuration present" \
+		     "pin $SPEAKER_PIN reads the firmware value $PIN1D_CFG - the firmware state was not restored on this resume. a1534_restore=1 (the default) is the mechanism meant to restore it; check the kernel log for the 'A1534: pin 0x1d after restore' line."
+	elif [ -n "$PIN1D_CFG" ]; then
+		emit PASS "speaker configuration present" "pin $SPEAKER_PIN cfg $PIN1D_CFG"
+	fi
+
+	# Output routing, which is a function of the jack. The driver switches
+	# the stream between converters itself, so exactly one of the two pins
+	# is meant to be driving at any moment: speakers when the socket is
+	# empty, headphones when it is not. Asserting the speaker pin
+	# unconditionally produced a FAIL on a correctly working machine with
+	# headphones plugged - a false alarm in the one tool whose whole job is
+	# to be believed, found 2026-09-15.
+	pinctl_of() {
+		local v
+		v=$(awk -v n="Node $1 " '$0 ~ "^"n {f=1} f && /Pin-ctls:/ {print $2; exit}' "$CODEC_FILE")
+		printf '%s' "${v%:}"
+	}
+	PINCTL=$(pinctl_of "$SPEAKER_PIN")
+	HP_PINCTL=$(pinctl_of "$HP_PIN")
+	if [ "$(jack_state)" = on ]; then
+		# Headphones plugged: pin 0x10 drives, pin 0x1d is muted by design.
+		case "$HP_PINCTL" in
+			0xc0|0x40)
+				emit PASS "headphone pin $HP_PIN driving" \
+				     "Pin-ctls $HP_PINCTL (OUT HP), jack plugged; speaker pin $SPEAKER_PIN ${PINCTL:-unknown} as designed" ;;
+			*)
+				emit FAIL "headphone pin $HP_PIN driving" \
+				     "headphones are plugged but pin $HP_PIN reads Pin-ctls ${HP_PINCTL:-unknown}, want 0xc0 - the jack event did not reach the driver, or the switch to converter 0x02 did not complete" ;;
+		esac
+	elif [ "$PINCTL" = "0x40" ]; then
+		emit PASS "speaker pin $SPEAKER_PIN enabled" "Pin-ctls $PINCTL (OUT), jack empty"
+	else
+		emit FAIL "speaker pin $SPEAKER_PIN enabled" \
+		     "jack is empty and Pin-ctls reads ${PINCTL:-unknown}, want 0x40"
+	fi
+fi
+
+# The log marker corroborates the gate, but its absence only means the
+# kernel log is unreadable, so it is never a hard failure on its own.
+KLOG=$(kernel_log)
+if [ -z "$KLOG" ]; then
+	emit SKIPPED "A1534 gate marker in kernel log" "kernel log not readable by this user"
+elif contains "$KLOG" 'MacBook9,1 (A1534) detected'; then
+	emit PASS "A1534 gate marker in kernel log" \
+	     "$(printf '%s' "$KLOG" | sed -n 's/.*\(CS4208: MacBook9,1.*\)/\1/p' | head -1)"
+else
+	emit FAIL "A1534 gate marker in kernel log" \
+	     "no 'MacBook9,1 (A1534) detected' marker - the generic path is in use"
+fi
+
+if [ -z "$KLOG" ]; then
+	emit SKIPPED "A1534 bring-up" "kernel log not readable by this user"
+elif contains_i "$KLOG" 'A1534:.*failed'; then
+	emit FAIL "A1534 bring-up" "$(printf '%s' "$KLOG" | grep -i 'A1534:.*failed' | head -1)"
+else
+	emit PASS "A1534 bring-up" "no failure reported in the kernel log"
+fi
+
+# --- 5. ALSA exposure -------------------------------------------------------
+
+section "5. ALSA"
+
+CARD=$(awk '/CS4208|HDA Intel PCH/{print $1; exit}' /proc/asound/cards 2>/dev/null)
+CARD=${CARD:-0}
+
+APLAY_L=$(aplay -l 2>/dev/null || true)
+if contains "$APLAY_L" 'CS4208'; then
+	emit PASS "analog playback device" "$(printf '%s' "$APLAY_L" | grep -m1 CS4208 | sed 's/^ *//')"
+else
+	emit FAIL "analog playback device" "no CS4208 playback device in aplay -l"
+fi
+
+ARECORD_L=$(arecord -l 2>/dev/null || true)
+if contains "$ARECORD_L" 'CS4208'; then
+	emit PASS "analog capture device" "$(printf '%s' "$ARECORD_L" | grep -m1 CS4208 | sed 's/^ *//')"
+else
+	emit FAIL "analog capture device" "no CS4208 capture device in arecord -l"
+fi
+
+# The speaker PCM must be able to carry the 4-channel stream the amplifiers
+# expect. Query capabilities before anything tries to use them.
+PCM_HW="hw:${CARD},0"
+if have aplay; then
+	CAPS=$(LC_ALL=C aplay -D "$PCM_HW" --dump-hw-params /dev/zero 2>&1 | sed -n '/CHANNELS/s/CHANNELS: //p' | head -1)
+	if [ -z "$CAPS" ]; then
+		emit SKIPPED "speaker PCM channel capability" "could not query $PCM_HW (device busy?)"
+	elif contains "$CAPS" '4'; then
+		# The four TAS5758L amplifiers sit on four TDM slots; a stereo-only
+		# PCM leaves them silent, which is what "Analog Stereo" did.
+		emit PASS "speaker PCM offers 4 channels" "$PCM_HW channels: $CAPS"
+	else
+		emit FAIL "speaker PCM offers 4 channels" \
+		     "$PCM_HW channels: $CAPS - the TDM amplifier slots cannot be fed"
+	fi
+fi
+
+# --- 6. PipeWire exposure ---------------------------------------------------
+
+section "6. PipeWire / WirePlumber"
+
+if have wpctl && wpctl status >/dev/null 2>&1; then
+	# wpctl status always prints "Sinks:" headings, so its text cannot decide
+	# this. Look for the ALSA sink of the analog profile by name instead.
+	if have pactl && pactl info >/dev/null 2>&1; then
+		SPK_SINK=$(pactl list short sinks 2>/dev/null \
+			| awk -v p="$ANALOG_PROFILE" '$2 ~ ("^alsa_output\\..*\\." p "$") { print $2; exit }')
+		if [ -n "$SPK_SINK" ]; then
+			emit PASS "PipeWire sink present" "$SPK_SINK"
+		else
+			emit FAIL "PipeWire sink present" "no ALSA sink for the $ANALOG_PROFILE profile in 'pactl list short sinks'"
+		fi
+	else
+		emit SKIPPED "PipeWire sink present" "pactl unavailable"
+	fi
+	emit PASS "PipeWire version" "$(pipewire --version 2>/dev/null | sed -n 2p)"
+
+	# Safety gate. The speaker path has no hardware volume control, so unless
+	# PipeWire applies volume in software the desktop slider does nothing
+	# useful and output runs at full scale. On the test machine an early build showed that as
+	# "10% and 100% sound the same, and everything clips".
+	ALSA_DEV=$(wpctl status 2>/dev/null \
+		| sed -n 's/.*[[:space:]]\([0-9]\+\)\..*\[alsa\].*/\1/p' | head -1)
+	if [ -z "$ALSA_DEV" ]; then
+		emit SKIPPED "software volume active" "could not identify the ALSA device"
+	else
+		DEVPROPS=$(wpctl inspect "$ALSA_DEV" 2>/dev/null)
+		if contains "$DEVPROPS" 'api.alsa.soft-mixer *= *"\?true'; then
+			emit PASS "software volume active on the card" "api.alsa.soft-mixer = true"
+		else
+			emit FAIL "software volume active on the card" \
+			     "api.alsa.soft-mixer is NOT set - the volume slider will not attenuate the speakers and output may be dangerously loud. Check $WP_DROPIN and run: systemctl --user restart wireplumber"
+		fi
+
+		# The profile set. This card has exactly one analog output port, and
+		# the stock ACP path for it declares itself unavailable while the
+		# headphone jack reports present - correct for a laptop with a
+		# separate headphone port, wrong here, because the driver moves the
+		# stream to the headphone converter itself. With the stock set, a
+		# plugged jack therefore took the port, the profile and the sink with
+		# it, and the desktop showed Dummy Output with no sound at all. It
+		# surfaced on resume, when profile selection reruns.
+		if contains "$DEVPROPS" "device.profile-set"; then
+			ACPSET=$(printf '%s' "$DEVPROPS" \
+				| sed -n 's/.*device\.profile-set *= *"\([^"]*\)".*/\1/p' | head -1)
+			emit PASS "ACP profile set selected" "$ACPSET"
+
+			# The shipped output path ends in an .include of a file
+			# owned by alsa-card-profiles. If that package ever moves
+			# or renames it, ACP silently builds no port, the profile
+			# has nothing to offer and the sink disappears - the same
+			# symptom as the bug this whole arrangement fixes, from a
+			# different cause. Name it rather than let it be rediscovered.
+			ACPPATH="$(dirname "$ACPSET")/macbook91-output-speaker.conf"
+			ACPINC=$(sed -n 's/^\.include[[:space:]]*//p' "$ACPPATH" 2>/dev/null | head -1)
+			if [ -z "$ACPINC" ]; then
+				emit SKIPPED "ACP path's include is present" \
+				     "no .include in ${ACPPATH:-the output path}"
+			elif [ -r "$ACPINC" ]; then
+				emit PASS "ACP path's include is present" "$ACPINC"
+			else
+				emit FAIL "ACP path's include is present" \
+				     "$ACPPATH includes $ACPINC, which is not readable - that file belongs to alsa-card-profiles, so a rename or move there breaks this card's only output port. Reinstall alsa-card-profiles, or update the .include in $ACPPATH to where the file now lives."
+			fi
+		else
+			emit FAIL "ACP profile set selected" \
+			     "device.profile-set is NOT set - the card is on the stock ACP profile set, whose only analog output port goes unavailable whenever headphones are plugged, leaving no sink at all. Check $WP_DROPIN and run: systemctl --user restart wireplumber"
+		fi
+	fi
+
+	# The behaviour the profile set exists for, measured rather than assumed:
+	# with headphones actually in the socket, the analog output profile must
+	# still be available and selected. Only observable while the jack is
+	# plugged, so it reports SKIPPED otherwise rather than passing vacuously.
+	if have pactl && pactl info >/dev/null 2>&1; then
+		CARDS=$(pactl list cards 2>/dev/null || true)
+		ACTIVE_PROFILE=$(printf '%s' "$CARDS" \
+			| sed -n 's/^[[:space:]]*Active Profile:[[:space:]]*//p' | head -1)
+		if [ "$(jack_state)" = on ]; then
+			if contains "$ACTIVE_PROFILE" "$ANALOG_PROFILE"; then
+				emit PASS "analog profile survives a plugged jack" \
+				     "$ACTIVE_PROFILE"
+			else
+				emit FAIL "analog profile survives a plugged jack" \
+				     "headphones are plugged and the card is on '${ACTIVE_PROFILE:-unknown}', not $ANALOG_PROFILE - this is the failure the profile set exists to prevent, and there is no sink for the internal audio path in this state"
+			fi
+		else
+			emit SKIPPED "analog profile survives a plugged jack" \
+			     "only observable with headphones plugged in"
+		fi
+	else
+		emit SKIPPED "analog profile survives a plugged jack" \
+		     "pactl unavailable"
+	fi
+else
+	emit SKIPPED "PipeWire" "no session bus / wpctl unavailable"
+fi
+
+# --- 7. HDMI (only when actually connected) ---------------------------------
+
+section "7. HDMI"
+
+ELD_FOUND=0
+for e in /proc/asound/card*/eld#*; do
+	[ -r "$e" ] || continue
+	if [ "$(sed -n 's/^monitor_present[[:space:]]*//p' "$e" | head -1)" = "1" ]; then
+		ELD_FOUND=1
+		emit PASS "HDMI/DP sink present" "$(sed -n 's/^monitor_name[[:space:]]*//p' "$e" | head -1)"
+		break
+	fi
+done
+[ "$ELD_FOUND" = 1 ] || emit SKIPPED "HDMI/DP" "not connected"
+
+# --- 8. suspend configuration ----------------------------------------------
+
+section "8. Suspend"
+
+MEM_SLEEP=$(cat /sys/power/mem_sleep 2>/dev/null || echo '')
+case "$MEM_SLEEP" in
+	*"[deep]"*) emit PASS "deep suspend selected" "$MEM_SLEEP" ;;
+	*deep*)     emit FAIL "deep suspend selected" "deep available but not selected: $MEM_SLEEP" ;;
+	*)          emit SKIPPED "deep suspend" "not available: ${MEM_SLEEP:-unknown}" ;;
+esac
+
+# --- 9. acoustic checks, only if the software gates passed ------------------
+
+section "9. Listening checks"
+
+# --no-sound is checked first: when the caller asked for no sound, saying the
+# software gates are why nothing played is simply untrue, and a reason that is
+# not the reason sends the reader looking in the wrong place.
+if [ "$NO_SOUND" = 1 ]; then
+	emit SKIPPED "speaker tone" "--no-sound given"
+	emit SKIPPED "microphone" "--no-sound given"
+	emit SKIPPED "headphone hotplug" "--no-sound given"
+elif [ "$FAILED" = 1 ]; then
+	emit SKIPPED "speaker tone" "software gates failed; not playing a tone"
+	emit SKIPPED "microphone" "software gates failed"
+	emit SKIPPED "headphone hotplug" "software gates failed"
+elif [ ! -t 0 ]; then
+	emit SKIPPED "speaker tone" "no terminal to ask the user"
+	emit SKIPPED "microphone" "no terminal to ask the user"
+	emit SKIPPED "headphone hotplug" "no terminal to ask the user"
+else
+	printf '\n  A short, quiet test tone (440 Hz at 12%% of full scale) will play\n'
+	printf '  on the internal speakers. Unplug headphones first.\n'
+	printf '\n'
+	printf '  Note: this speaker path has no hardware volume control, so the\n'
+	printf '  desktop slider only works when software volume is enabled for the\n'
+	printf '  card. This package ships that configuration.\n\n'
+	if ask "Ready to play the test tone?"; then
+		# Target the internal device explicitly rather than the desktop
+		# default sink, and keep the level moderate: these are small
+		# internal speakers.
+		TONE_OK=0
+		play_quiet_tone && TONE_OK=1
+		if [ "$TONE_OK" != 1 ]; then
+			# Never blame the hardware for a tone we failed to play.
+			emit FAIL "speaker tone" \
+			     "could not play to $PCM_HW: ${TONE_ERR:-unknown error} (no tone was produced; this is not evidence about the speakers)"
+		elif ask "Did you hear the tone from the internal speakers?"; then
+			emit PASS "speaker tone" "user confirmed audible"
+		else
+			emit FAIL "speaker tone" "tone played to $PCM_HW but user reported no sound"
+		fi
+	else
+		emit SKIPPED "speaker tone" "declined by user"
+	fi
+
+	# Microphone: software checks signal level automatically, the user
+	# confirms it was really their voice.
+	if ask "Test the microphone? (you will be asked to speak for 3 seconds)"; then
+		REC="$RUNTMP/mb91mic.wav"
+		printf '  Speak now...\n'
+		ARECORD_ERR=""
+		ARECORD_OK=0
+		# Retry EBUSY the same way the tone path does: PipeWire can still be
+		# holding the device for a few seconds after the last check.
+		for _ in 1 2 3 4 5 6 7 8 9 10; do
+			ARECORD_ERR=$(timeout 6 arecord -D "hw:${CARD},0" -f S16_LE -r 48000 -c 2 -d 3 "$REC" 2>&1 >/dev/null) \
+				&& { ARECORD_OK=1; break; }
+			case "$ARECORD_ERR" in
+				*[Bb]usy*|*EBUSY*) sleep 1; continue ;;
+				*) break ;;
+			esac
+		done
+		if [ "$ARECORD_OK" != 1 ] || [ ! -s "$REC" ]; then
+			emit FAIL "microphone signal" \
+			     "arecord failed: ${ARECORD_ERR:-no data captured} (this is not evidence about the microphone)"
+		elif ! have sox; then
+			emit SKIPPED "microphone signal" "sox not installed"
+		else
+			PEAK=$(LC_ALL=C sox "$REC" -n stat 2>&1 | sed -n 's/^Maximum amplitude:[[:space:]]*//p' || echo '')
+			# Reject both silence and a clipped/railed signal.
+			if awk -v p="${PEAK:-0}" 'BEGIN{exit !(p>0.005 && p<0.99)}'; then
+				emit PASS "microphone signal" "peak amplitude $PEAK"
+			elif awk -v p="${PEAK:-0}" 'BEGIN{exit !(p<=0.005)}'; then
+				emit FAIL "microphone signal" "peak amplitude ${PEAK:-0} - null signal"
+			else
+				emit FAIL "microphone signal" "peak amplitude $PEAK - clipping"
+			fi
+		fi
+		rm -f "$REC"   # never archived, never kept; also covered by the exit trap
+		if ask "Was that your own voice through the internal microphone?"; then
+			emit PASS "microphone source" "user confirmed"
+		else
+			emit FAIL "microphone source" "user did not confirm"
+		fi
+	else
+		emit SKIPPED "microphone" "declined by user"
+	fi
+
+	# Headphone hotplug: plug and unplug observed automatically; the ear only confirms where a quiet tone came out.
+	if [ -z "$(hp_jack_numid)" ]; then
+		emit SKIPPED "headphone hotplug" "no headphone jack control on this card"
+	elif ask "Test headphone hotplug? (you will plug and unplug once)"; then
+		# The jack must read empty first: headphones that are already in pass
+		# the plug poll below at once, and no plug is observed at all.
+		if [ "$(jack_state)" != off ]; then
+			printf '  Unplug the headphones first...\n'
+		fi
+		HP_OK=0
+		if ! wait_jack_state off 30; then
+			emit FAIL "headphone jack detected automatically" \
+			     "the jack still reads plugged after 30s; no plug could be observed"
+		else
+			# A capture runs across the plug, as in a call: the plug replays
+			# the bring-up, which once stopped a running capture
+			# (docs/INCIDENT-20261019.md).
+			start_bg_capture || emit SKIPPED "capture survives the headphone plug" \
+				"no capture on hw:${CARD},0: ${BG_CAP_ERR:-unknown error}"
+			printf '  Plug the headphones in now...\n'
+			for _ in $(seq 1 30); do
+				# Re-read each poll: the jack state changes while we wait.
+				if [ "$(jack_state)" = on ]; then
+					HP_OK=1; break
+				fi
+				sleep 1
+			done
+			if [ "$HP_OK" != 1 ]; then
+				emit FAIL "headphone jack detected automatically" \
+				     "no jack transition observed on pin $HP_PIN within 30s"
+			fi
+		fi
+		if [ "$HP_OK" != 1 ]; then
+			stop_bg_capture
+			emit SKIPPED "headphone tone" "plug not detected; not playing a tone"
+		else
+			emit PASS "headphone jack detected automatically" "HP pin $HP_PIN reports output"
+			[ -z "$BG_CAP_PID" ] || bg_capture_check "capture survives the headphone plug"
+			stop_bg_capture
+			printf '  A quiet tone (3%% of full scale) plays in the headphones now.\n'
+			if ! play_quiet_tone "$HP_TONE_AMP"; then
+				emit FAIL "headphone tone" \
+				     "could not play to $PCM_HW: ${TONE_ERR:-unknown error} (no tone was produced; this is not evidence about the headphones)"
+			elif ask "Did you hear the tone in the headphones?"; then
+				emit PASS "headphone tone" "user confirmed"
+			else
+				emit FAIL "headphone tone" "user did not hear it in the headphones"
+			fi
+			start_bg_capture || emit SKIPPED "capture survives the headphone unplug" \
+				"no capture on hw:${CARD},0: ${BG_CAP_ERR:-unknown error}"
+			printf '  Now unplug the headphones...\n'
+			HP_OFF=0
+			for _ in $(seq 1 30); do
+				if [ "$(jack_state)" = off ]; then
+					HP_OFF=1; break
+				fi
+				sleep 1
+			done
+			# The speaker-level tone plays only once the jack reads empty:
+			# into headphones it would be four times the level above.
+			if [ "$HP_OFF" != 1 ]; then
+				stop_bg_capture
+				emit FAIL "headphone unplug detected automatically" \
+				     "jack still reads plugged after 30s; not playing on the speakers"
+			else
+				emit PASS "headphone unplug detected automatically" "HP pin $HP_PIN reports no headphones"
+				[ -z "$BG_CAP_PID" ] || bg_capture_check "capture survives the headphone unplug"
+				stop_bg_capture
+				if ! play_quiet_tone; then
+					emit FAIL "speakers after unplug" \
+					     "could not play to $PCM_HW: ${TONE_ERR:-unknown error} (no tone was produced; this is not evidence about the speakers)"
+				elif ask "Did the tone come from the internal speakers again?"; then
+					emit PASS "speakers after unplug" "user confirmed"
+				else
+					emit FAIL "speakers after unplug" "user did not hear the speakers"
+				fi
+			fi
+		fi
+	else
+		emit SKIPPED "headphone hotplug" "declined by user"
+	fi
+fi
+
+# --- 10. verdict and, on failure, one diagnostic archive --------------------
+
+section "Result"
+
+PASS_N=0; FAIL_N=0; SKIP_N=0
+for r in "${RESULTS[@]}"; do
+	case "${r%%|*}" in
+		PASS) PASS_N=$((PASS_N+1)) ;;
+		FAIL) FAIL_N=$((FAIL_N+1)) ;;
+		*)    SKIP_N=$((SKIP_N+1)) ;;
+	esac
+done
+printf '  %d passed, %d failed, %d skipped\n\n' "$PASS_N" "$FAIL_N" "$SKIP_N"
+
+# A run whose listening checks were skipped proved the software path only.
+LISTEN_SKIP_N=0
+for r in "${RESULTS[@]}"; do
+	case "$r" in
+		"SKIPPED|speaker tone|"*|"SKIPPED|microphone|"*|"SKIPPED|microphone signal|"*|"SKIPPED|headphone hotplug|"*)
+			LISTEN_SKIP_N=$((LISTEN_SKIP_N+1)) ;;
+	esac
+done
+if [ "$FAIL_N" -eq 0 ]; then
+	if [ "$LISTEN_SKIP_N" -gt 0 ]; then
+		printf '  %sPASS%s  software checks passed; %d listening check(s) skipped, so the sound itself is not verified.\n\n' \
+		       "$C_OK" "$C_0" "$LISTEN_SKIP_N"
+	else
+		printf '  %sPASS%s  MacBook9,1 audio verified.\n\n' "$C_OK" "$C_0"
+	fi
+	exit 0
+fi
+
+printf '  %sFAIL%s  see the diagnostic archive below.\n' "$C_NO" "$C_0"
+
+PKGVER=$( { pacman -Q "$PACMAN_PKG" 2>/dev/null \
+            || pacman -Q "$PKG" 2>/dev/null; } | awk '{print $2}' )
+[ -n "$PKGVER" ] || PKGVER=unknown
+STAMP=$(date -u +%Y%m%dT%H%M%SZ)
+# The archive directory itself must not be attacker-guessable: build it inside
+# a mktemp -d directory rather than a predictable, pre-creatable path, while
+# keeping the descriptive <pkg>-<ver>-<kernel>-<stamp> name the project
+# requires for the final archive.
+ARCHIVE_STAGE=$(mktemp -d)
+OUT="$ARCHIVE_STAGE/${PKG}-${PKGVER}-${KVER}-${STAMP}"
+mkdir -p "$OUT"
+
+{
+	printf 'package: %s %s\nkernel:  %s\ndmi:     %s / %s\n\n' \
+	       "$PKG" "$PKGVER" "$KVER" "$DMI_VENDOR" "$DMI_PRODUCT"
+	printf 'verifier results:\n'
+	for r in "${RESULTS[@]}"; do
+		printf '  %-7s %-42s %s\n' "${r%%|*}" "$(echo "$r" | cut -d'|' -f2)" "$(echo "$r" | cut -d'|' -f3-)"
+	done
+} > "$OUT/00-results.txt"
+
+[ -n "$CODEC_FILE" ] && cp "$CODEC_FILE" "$OUT/10-codec-dump.txt" 2>/dev/null
+cat /proc/asound/cards            > "$OUT/11-cards.txt" 2>/dev/null
+modinfo snd-hda-codec-cs420x 2>/dev/null | grep -v '^signature' > "$OUT/12-modinfo.txt"
+cat "$SYSMOD/version"             > "$OUT/13-loaded-version.txt" 2>/dev/null
+have dkms && dkms status          > "$OUT/14-dkms.txt" 2>&1
+have aplay && aplay -l            > "$OUT/20-aplay.txt" 2>&1
+have arecord && arecord -l        > "$OUT/21-arecord.txt" 2>&1
+have amixer && amixer -c "$CARD" contents > "$OUT/22-mixer.txt" 2>&1
+have wpctl && wpctl status        > "$OUT/30-wpctl.txt" 2>&1
+# Profile and port availability, and the two files that decide them. This is
+# the direct evidence for the class of failure where the card is healthy and
+# the session manager has still left it without a sink.
+have pactl && pactl list cards    > "$OUT/31-cards.txt" 2>&1
+cp "$WP_DROPIN" "$OUT/32-wireplumber-dropin.conf" 2>/dev/null
+cp -r "/usr/share/$PKG/acp" "$OUT/33-acp" 2>/dev/null
+cat /sys/power/mem_sleep          > "$OUT/40-suspend.txt" 2>/dev/null
+# Audio-relevant kernel lines only; never a full journal.
+journalctl -b -k --no-pager 2>/dev/null \
+	| grep -Ei 'snd[_-]|hda|cs420|cs4208|A1534' | tail -300 > "$OUT/50-kernel-audio.txt"
+# DKMS build log for this kernel, if one exists. DKMS versions carry no
+# pacman pkgrel: 20261006.01-1 is built under 20261006.01.
+DKMS_VER=${PKGVER%-*}
+cp "/var/lib/dkms/$PKG/$DKMS_VER/$KVER/$(uname -m)/log/make.log" "$OUT/51-dkms-build.log" 2>/dev/null \
+	|| cp "/var/lib/dkms/$PKG/$DKMS_VER/build/make.log" "$OUT/51-dkms-build.log" 2>/dev/null
+
+# Staged unguessably, kept somewhere the maintainer can still find it tomorrow:
+# /tmp is cleared on a schedule and on reboot, and an archive nobody can
+# produce later is not a diagnostic. Same directory the runner writes its
+# results to.
+KEEP="${XDG_STATE_HOME:-$HOME/.local/state}/$PKG/diagnostics"
+ARCHIVE="$OUT.tar.zst"
+if tar -C "$(dirname "$OUT")" -caf "$ARCHIVE" "$(basename "$OUT")" 2>/dev/null; then
+	rm -rf "$OUT"
+	if mkdir -p "$KEEP" 2>/dev/null && chmod 700 "$KEEP" 2>/dev/null &&
+	   mv "$ARCHIVE" "$KEEP/" 2>/dev/null; then
+		ARCHIVE="$KEEP/$(basename "$ARCHIVE")"
+	fi
+	rmdir "$ARCHIVE_STAGE" 2>/dev/null || true   # empty once the archive moved to $KEEP
+	printf '        %s\n\n' "$ARCHIVE"
+	printf '        It contains no audio recording and no credentials.\n\n'
+else
+	printf '  could not create the archive; the collected diagnostics are in:\n'
+	printf '        %s\n\n' "$OUT"
+fi
+exit 1

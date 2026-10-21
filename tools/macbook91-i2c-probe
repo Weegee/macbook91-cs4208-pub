@@ -1,0 +1,109 @@
+#!/usr/bin/env python3
+# SPDX-License-Identifier: GPL-3.0-or-later
+"""SUPERSEDED - use macbook91-runner probe (or macbook91-amp-transport
+directly). Kept as evidence of what was run; nothing new should be added here.
+
+Probe the CS4208's I2C master live, from user space.
+
+Needs root: sound/hda/hda_hwdep.c gates the verb ioctl on CAP_SYS_RAWIO
+unless CONFIG_SND_DEBUG_VERBOSE, which this kernel does not set.
+
+Read-mostly. The only writes are to vendor widget 0x24's own coefficients -
+the I2C engine registers - and, in the final step, the same amplifier register
+values Apple's own driver writes to these exact chips. It plays no audio and
+touches no GPIO.
+
+See docs/AMPLIFIER-PROTOCOL.md for where every constant comes from.
+"""
+import fcntl, struct, sys
+
+HWDEP = '/dev/snd/hwC0D0'
+HDA_IOCTL_VERB_WRITE = 0xC0084811      # _IOWR('H', 0x11, struct hda_verb_ioctl)
+
+VENDOR_NID = 0x24
+SET_COEF_INDEX = 0x500
+GET_PROC_COEF  = 0x0c00
+SET_PROC_COEF  = 0x400
+SET_PROC_STATE = 0x703
+GET_PROC_STATE = 0xf03
+
+COEF_ENABLE, COEF_ADDR, COEF_DATA, COEF_CTRL, COEF_STATUS = 0x00, 0x14, 0x15, 0x16, 0x17
+CTRL_START, CTRL_STOP, ENABLE_BIT = 0x04, 0x02, 0x08
+
+fd = None
+
+def verb(nid, v, param):
+    cmd = ((nid & 0xff) << 24) | ((v & 0xffff) << 8) | (param & 0xff)
+    buf = struct.pack('II', cmd, 0)
+    out = fcntl.ioctl(fd, HDA_IOCTL_VERB_WRITE, buf)
+    return struct.unpack('II', out)[1]
+
+def coef_get(idx):
+    verb(VENDOR_NID, SET_COEF_INDEX, idx)
+    return verb(VENDOR_NID, GET_PROC_COEF, 0) & 0xffff
+
+def coef_set(idx, val):
+    verb(VENDOR_NID, SET_COEF_INDEX, idx)
+    verb(VENDOR_NID, SET_PROC_COEF | ((val >> 8) & 0xff), val & 0xff)
+
+def main():
+    global fd
+    fd = open(HWDEP, 'rb+', buffering=0)
+
+    pin1d = verb(0x1d, 0xf1c, 0)
+    state = "INTACT (pre-suspend)" if pin1d == 0x90100110 else "LOST (post-suspend)"
+    print(f"pin 0x1d config default : 0x{pin1d:08x}   {state}")
+    print(f"widget 0x24 proc state  : 0x{verb(VENDOR_NID, GET_PROC_STATE, 0):x}")
+    print(f"GPIO data/dir/mask      : 0x{verb(0x01,0xf15,0):02x} / 0x{verb(0x01,0xf17,0):02x} / 0x{verb(0x01,0xf16,0):02x}")
+    print()
+
+    print("coefficients 0x00-0x17 as found:")
+    for base in range(0x00, 0x18, 8):
+        row = " ".join(f"{coef_get(base+i):04x}" for i in range(8))
+        print(f"  {base:02x}: {row}")
+    print()
+
+    # STEP 1 - does a coefficient write to the I2C engine stick at all?
+    print("step 1: can the I2C engine registers be written?")
+    for idx, val in ((COEF_ADDR, 0x00d8), (COEF_CTRL, 0x0004)):
+        before = coef_get(idx)
+        coef_set(idx, val)
+        after = coef_get(idx)
+        verdict = "STICKS" if after == val else ("UNCHANGED" if after == before else "CHANGED-OTHER")
+        print(f"  coef 0x{idx:02x}: was {before:04x}, wrote {val:04x}, reads {after:04x}  -> {verdict}")
+    print()
+
+    # STEP 2 - with PROC_STATE asserted, as setupTDMPath does first
+    print("step 2: same, after setProcessingState(1) on widget 0x24")
+    verb(VENDOR_NID, SET_PROC_STATE, 1)
+    before = coef_get(COEF_ADDR)
+    coef_set(COEF_ADDR, 0x00d8)
+    after = coef_get(COEF_ADDR)
+    print(f"  coef 0x{COEF_ADDR:02x}: was {before:04x}, wrote 00d8, reads {after:04x}")
+    print()
+
+    # STEP 3 - open the bridge, then a full read transaction against amp 0x6c
+    print("step 3: enable the bridge and read amp 0x6c register 0x01")
+    v = coef_get(COEF_ENABLE)
+    coef_set(COEF_ENABLE, v ^ ENABLE_BIT)
+    coef_set(COEF_ENABLE, (v ^ ENABLE_BIT) | ENABLE_BIT)
+    print(f"  enable coef 0x00: was {v:04x}, now {coef_get(COEF_ENABLE):04x} (bit 3 must be set)")
+
+    addr = 0x6c
+    coef_set(COEF_ADDR, addr << 1);            s1 = coef_get(COEF_STATUS)
+    coef_set(COEF_CTRL, CTRL_START);           s2 = coef_get(COEF_STATUS)
+    coef_set(COEF_DATA, 0x01);                 s3 = coef_get(COEF_STATUS)
+    coef_set(COEF_ADDR, (addr << 1) | 1);      s4 = coef_get(COEF_STATUS)
+    coef_set(COEF_CTRL, CTRL_START);           s5 = coef_get(COEF_STATUS)
+    data = coef_get(COEF_DATA);                s6 = coef_get(COEF_STATUS)
+    coef_set(COEF_CTRL, CTRL_STOP)
+    print(f"  status after each step: {s1:04x} {s2:04x} {s3:04x} {s4:04x} {s5:04x} {s6:04x}")
+    print(f"  data register read    : {data:04x}")
+    print()
+    print("  a status that never changes means the engine never ran.")
+
+    # leave the bridge closed again
+    coef_set(COEF_ENABLE, coef_get(COEF_ENABLE) & ~ENABLE_BIT)
+    print("bridge closed; nothing else was changed.")
+
+main()

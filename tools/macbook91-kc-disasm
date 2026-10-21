@@ -1,0 +1,217 @@
+#!/usr/bin/env python3
+# SPDX-License-Identifier: GPL-3.0-or-later
+"""Disassemble one function out of a kext inside a Mach-O kernel collection.
+
+Read-only. Takes no input from the network and executes nothing it reads.
+
+    macbook91-kc-disasm <file.kc> <kext-bundle-id> syms <substr>...
+    macbook91-kc-disasm <file.kc> <kext-bundle-id> dis  <symbol-or-0xaddr> [bytes]
+    macbook91-kc-disasm <file.kc> <kext-bundle-id> hex  <0xaddr> <bytes>
+    macbook91-kc-disasm <file.kc> <kext-bundle-id> segs
+    macbook91-kc-disasm <file.kc> <kext-bundle-id> xref <0xaddr>
+
+Addresses are the collection's unslid vmaddrs, exactly as the symbol table
+reports them, so they can be quoted in documentation and found again.
+"""
+import struct, subprocess, sys, bisect, re, tempfile, os
+
+LC_SEGMENT_64 = 0x19
+LC_SYMTAB = 0x02
+LC_FILESET_ENTRY = 0x80000035
+
+
+class KC:
+    def __init__(self, path):
+        self.buf = open(path, 'rb').read()
+        self.path = path
+
+    def cmds(self, off):
+        ncmds = struct.unpack_from('<I', self.buf, off + 16)[0]
+        p = off + 32
+        out = []
+        for _ in range(ncmds):
+            c, s = struct.unpack_from('<II', self.buf, p)
+            if s == 0:
+                break
+            out.append((c, s, p))
+            p += s
+        return out
+
+    def fileset(self, want):
+        for c, s, p in self.cmds(0):
+            if c != LC_FILESET_ENTRY:
+                continue
+            vmaddr, fileoff, noff, _ = struct.unpack_from('<QQII', self.buf, p + 8)
+            end = self.buf.index(b'\0', p + noff)
+            if self.buf[p + noff:end].decode() == want:
+                return vmaddr, fileoff
+        raise SystemExit('kext not found in collection: ' + want)
+
+    def load(self, bundle):
+        self.vmaddr, self.hdr = self.fileset(bundle)
+        self.segs = []
+        self.syms = []
+        for c, s, p in self.cmds(self.hdr):
+            if c == LC_SEGMENT_64:
+                name = self.buf[p + 8:p + 24].rstrip(b'\0').decode()
+                vm, vmsz, fo, fsz = struct.unpack_from('<QQQQ', self.buf, p + 24)
+                nsects = struct.unpack_from('<I', self.buf, p + 64)[0]
+                sects = []
+                q = p + 72
+                for _ in range(nsects):
+                    sn = self.buf[q:q + 16].rstrip(b'\0').decode()
+                    saddr, ssize = struct.unpack_from('<QQ', self.buf, q + 32)
+                    soff = struct.unpack_from('<I', self.buf, q + 48)[0]
+                    sects.append((sn, saddr, ssize, soff))
+                    q += 80
+                self.segs.append((name, vm, vmsz, fo, fsz, sects))
+            elif c == LC_SYMTAB:
+                symoff, nsyms, stroff, _ = struct.unpack_from('<IIII', self.buf, p + 8)
+                for i in range(nsyms):
+                    o = symoff + i * 16
+                    strx, ntype, nsect, ndesc, nvalue = struct.unpack_from('<IBBHQ', self.buf, o)
+                    e = self.buf.index(b'\0', stroff + strx)
+                    self.syms.append((nvalue, self.buf[stroff + strx:e].decode('utf-8', 'replace')))
+        self.syms.sort()
+        self.addrs = [a for a, _ in self.syms]
+
+    def off(self, addr):
+        """vmaddr -> file offset, through this kext's own segments."""
+        for name, vm, vmsz, fo, fsz, _ in self.segs:
+            if vm <= addr < vm + fsz:
+                return fo + (addr - vm)
+        # fall back to the collection's own segments (shared __TEXT etc.)
+        for c, s, p in self.cmds(0):
+            if c != LC_SEGMENT_64:
+                continue
+            vm, vmsz, fo, fsz = struct.unpack_from('<QQQQ', self.buf, p + 24)
+            if vm <= addr < vm + fsz:
+                return fo + (addr - vm)
+        raise SystemExit('address %#x is in no mapped segment' % addr)
+
+    def sym(self, name):
+        hits = [(a, n) for a, n in self.syms if n == name or n == '_' + name]
+        if not hits:
+            hits = [(a, n) for a, n in self.syms if name in n]
+        if not hits:
+            raise SystemExit('no symbol matching ' + name)
+        if len(hits) > 1:
+            sys.stderr.write('note: %d symbols match, using the first\n' % len(hits))
+        return hits[0]
+
+    def size(self, addr):
+        i = bisect.bisect_right(self.addrs, addr)
+        while i < len(self.addrs) and self.addrs[i] == addr:
+            i += 1
+        return (self.addrs[i] - addr) if i < len(self.addrs) else 0x400
+
+    def name_at(self, addr):
+        i = bisect.bisect_right(self.addrs, addr) - 1
+        if i < 0:
+            return None
+        a, n = self.syms[i]
+        return n if a == addr else '%s+%#x' % (n, addr - a)
+
+
+def demangle(names):
+    p = subprocess.run(['c++filt'], input='\n'.join(names), capture_output=True, text=True)
+    return p.stdout.splitlines()
+
+
+def main():
+    kcpath, bundle, mode = sys.argv[1], sys.argv[2], sys.argv[3]
+    kc = KC(kcpath)
+    kc.load(bundle)
+
+    if mode == 'segs':
+        print('kext header at file %#x, vmaddr %#x' % (kc.hdr, kc.vmaddr))
+        for name, vm, vmsz, fo, fsz, sects in kc.segs:
+            print('SEG %-14s vm=%#010x/%#x file=%#x/%#x' % (name, vm, vmsz, fo, fsz))
+            for sn, sa, ss, so in sects:
+                print('    %-18s vm=%#010x/%#x file=%#x' % (sn, sa, ss, so))
+        return
+
+    if mode == 'syms':
+        pats = sys.argv[4:]
+        sel = [(a, n) for a, n in kc.syms if any(p in n for p in pats)]
+        dem = demangle([n for _, n in sel])
+        for (a, n), d in zip(sel, dem):
+            print('%#010x  size~%-6d %s' % (a, kc.size(a), d))
+        return
+
+    if mode == 'hex':
+        addr = int(sys.argv[4], 0)
+        n = int(sys.argv[5], 0)
+        o = kc.off(addr)
+        data = kc.buf[o:o + n]
+        for i in range(0, len(data), 16):
+            row = data[i:i + 16]
+            print('%#010x  %-47s  |%s|' % (
+                addr + i, ' '.join('%02x' % b for b in row),
+                ''.join(chr(b) if 32 <= b < 127 else '.' for b in row)))
+        return
+
+    if mode == 'xref':
+        target = int(sys.argv[4], 0)
+        # scan __text for rel32 call/jmp to target
+        for name, vm, vmsz, fo, fsz, sects in kc.segs:
+            for sn, sa, ss, so in sects:
+                if sn not in ('__text',):
+                    continue
+                blob = kc.buf[so:so + ss]
+                for i in range(len(blob) - 5):
+                    if blob[i] in (0xe8, 0xe9):
+                        d = struct.unpack_from('<i', blob, i + 1)[0]
+                        if sa + i + 5 + d == target:
+                            print('%#010x  %s  (%s)' % (
+                                sa + i, 'call' if blob[i] == 0xe8 else 'jmp',
+                                kc.name_at(sa + i)))
+        return
+
+    if mode == 'dis':
+        what = sys.argv[4]
+        if what.startswith('0x'):
+            addr = int(what, 0)
+            n = int(sys.argv[5], 0) if len(sys.argv) > 5 else kc.size(addr)
+        else:
+            addr, full = kc.sym(what)
+            n = int(sys.argv[5], 0) if len(sys.argv) > 5 else kc.size(addr)
+            print('; %s' % demangle([full])[0])
+        print('; %#x  %d bytes  (file offset %#x)' % (addr, n, kc.off(addr)))
+        o = kc.off(addr)
+        blob = kc.buf[o:o + n]
+        fd, tmp = tempfile.mkstemp(prefix='macbook91-kc-disasm-', suffix='.bin')
+        try:
+            with os.fdopen(fd, 'wb') as f:
+                f.write(blob)
+            p = subprocess.run(['objdump', '-D', '-b', 'binary', '-m', 'i386:x86-64',
+                                '-M', 'att', '--adjust-vma=%#x' % addr, tmp],
+                               capture_output=True, text=True)
+            if p.returncode:
+                raise SystemExit(p.stderr)
+            for line in p.stdout.splitlines():
+                if not line.strip() or ':\tfile format' in line or \
+                        line.startswith('Disassembly') or line.startswith(tmp):
+                    continue
+                # annotate call targets with symbol names
+                if 'call' in line or line.strip().endswith('>'):
+                    pass
+                m = re.match(r'\s*([0-9a-f]+):\s+((?:[0-9a-f]{2} )+)\s*(\S+)\s*(.*)', line)
+                if m and m.group(3) in ('call', 'callq', 'jmp', 'jmpq'):
+                    try:
+                        t = int(m.group(4).split()[0], 16)
+                        nm = kc.name_at(t)
+                        if nm:
+                            line += '   ; ' + demangle([nm.split('+')[0]])[0] + \
+                                ('+' + nm.split('+')[1] if '+' in nm else '')
+                    except (ValueError, IndexError):
+                        pass
+                print(line)
+        finally:
+            os.unlink(tmp)
+        return
+
+    raise SystemExit('unknown mode ' + mode)
+
+
+main()

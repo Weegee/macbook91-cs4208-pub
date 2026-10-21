@@ -1,0 +1,59 @@
+#!/usr/bin/env python3
+# SPDX-License-Identifier: BSD-3-Clause
+# Copyright (c) 2019, vit9696
+# Copyright (c) 2016-2017, The HermitCrabs Lab; 2016-2020, Download-Fritz;
+# 2017-2020, savvas; 2016-2020, vit9696 (the holders named in OpenCorePkg's LICENSE.txt)
+#
+# Derived from OpenCorePkg Utilities/macrecovery/macrecovery.py,
+# https://github.com/acidanthera/OpenCorePkg (revision 51535b6, BSD-3-Clause).
+# The license text is in LICENSES/BSD-3-Clause.txt. Changes made for this
+# project are under the same license.
+"""Verify a BaseSystem.dmg against its Apple-signed chunklist.
+
+Checks every chunk's SHA-256 and the RSA signature over the chunk table,
+using Apple's EFI ROM public key. Derived from the chunklist verification in
+OpenCorePkg's macrecovery.py; the key is read from that file as data, never
+executed. The key comes from zhangyoufu's comment on
+https://gist.github.com/MCJack123/943eaca762730ca4b7ae460b731b68e7
+(as credited in macrecovery.py).
+"""
+import hashlib, re, struct, sys
+
+src = open(sys.argv[3]).read()
+KEY = int(re.search(r'Apple_EFI_ROM_public_key_1\s*=\s*(0x[0-9a-fA-F]+)', src).group(1), 16)
+
+HDR = struct.Struct('<4sIBBBxQQQ')
+CHUNK = struct.Struct('<I32s')
+
+dmg, clist = sys.argv[1], sys.argv[2]
+with open(clist, 'rb') as f:
+    raw = f.read(HDR.size)
+    magic, hsize, ver, cmethod, smethod, ccount, coff, soff = HDR.unpack(raw)
+    assert magic == b'CNKL' and hsize == HDR.size and ver == 1 and cmethod == 1, (magic, hsize, ver, cmethod)
+    ctx = hashlib.sha256(raw)
+    chunks = []
+    for _ in range(ccount):
+        d = f.read(CHUNK.size)
+        ctx.update(d)
+        chunks.append(CHUNK.unpack(d))
+    digest = ctx.digest()
+    sig = f.read(256)
+    assert smethod == 1 and len(sig) == 256, smethod
+    plaintext = int(f'0x1{"f"*404}003031300d060960864801650304020105000420{"0"*64}', 16) | int.from_bytes(digest, 'big')
+    ok_sig = pow(int.from_bytes(sig, 'little'), 0x10001, KEY) == plaintext
+
+print(f'chunks: {ccount}')
+print(f'Apple RSA signature over the chunk table: {"VALID" if ok_sig else "INVALID"}')
+if not ok_sig:
+    sys.exit(1)
+
+bad = 0
+with open(dmg, 'rb') as f:
+    for i, (size, want) in enumerate(chunks):
+        got = hashlib.sha256(f.read(size)).digest()
+        if got != want:
+            bad += 1
+            print(f'  chunk {i} MISMATCH')
+    trailing = f.read()
+print(f'data chunks verified: {ccount - bad}/{ccount}, trailing bytes: {len(trailing)}')
+sys.exit(1 if bad or trailing else 0)

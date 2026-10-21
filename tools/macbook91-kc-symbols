@@ -1,0 +1,36 @@
+#!/usr/bin/env python3
+# SPDX-License-Identifier: GPL-3.0-or-later
+import struct, sys, subprocess
+kc = sys.argv[1]; want = sys.argv[2]
+buf = open(kc,'rb').read()
+LC_FILESET_ENTRY=0x80000035; LC_SYMTAB=0x02; LC_SEGMENT_64=0x19
+def cmds(off):
+    ncmds = struct.unpack_from('<I', buf, off+16)[0]
+    p=off+32; out=[]
+    for _ in range(ncmds):
+        c,s = struct.unpack_from('<II', buf, p); out.append((c,s,p)); p+=s
+    return out
+ent=None
+for c,s,p in cmds(0):
+    if c==LC_FILESET_ENTRY:
+        vmaddr,fileoff,noff,_=struct.unpack_from('<QQII',buf,p+8)
+        name=buf[p+noff:buf.index(b'\0',p+noff)].decode()
+        if name==want: ent=(vmaddr,fileoff)
+vmaddr,fileoff=ent
+symoff=nsyms=stroff=None
+for c,s,p in cmds(fileoff):
+    if c==LC_SYMTAB:
+        symoff,nsyms,stroff,strsize=struct.unpack_from('<IIII',buf,p+8)
+syms=[]
+for i in range(nsyms):
+    o=symoff+i*16
+    strx,ntype,nsect,ndesc,nvalue=struct.unpack_from('<IBBHQ',buf,o)
+    nm=buf[stroff+strx:buf.index(b'\0',stroff+strx)].decode(errors='replace')
+    syms.append((nvalue,nm))
+syms.sort()
+sel=[(a,n) for a,n in syms if any(k in n for k in sys.argv[3:])]
+for a,n in sel:
+    # find next symbol address for size
+    nxt=next((x for x,_ in syms if x>a), a)
+    d=subprocess.run(['c++filt',n],capture_output=True,text=True).stdout.strip()
+    print(f'0x{a:x}  size~{nxt-a:<6} {d}')

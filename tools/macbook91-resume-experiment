@@ -1,0 +1,188 @@
+#!/usr/bin/env bash
+# SPDX-License-Identifier: GPL-3.0-or-later
+#
+# SUPERSEDED — use macbook91-runner cycle. This tool's question was answered
+# and retired hw.resume_probe_measured. Kept as evidence of what was run;
+# nothing new should be added here.
+#
+# macbook91-resume-experiment — after a suspend has killed the speakers, does
+# re-running the codec probe bring them back?
+#
+# Why this matters. Measurement has shown that pin 0x1d's configuration default
+# is ALREADY correct when cs4208_probe() starts at cold boot, and is wrong after
+# a resume - and that setup_a1534() never changes it either way. So whatever
+# establishes the working state happens before this driver runs. The question
+# left is whether re-running the probe can recover it:
+#
+#   YES -> the driver can trigger the same thing on resume.
+#   NO  -> the state is established by the Mac firmware at power-on and a deep
+#          sleep loses it for good; suspend/resume then cannot be fixed from
+#          the driver, and that is a limitation to document rather than chase.
+#
+# /sys/class/sound/hwC0D0/reconfig is the kernel's own mechanism for this
+# (CONFIG_SND_HDA_RECONFIG). It tears down and re-probes the codec without
+# unloading the module or rebooting.
+#
+# Run this AFTER a suspend/resume that has left the speakers silent.
+# Needs root for the reconfig write. Headphones unplugged.
+#
+set -u
+
+CARD=0
+DEV="hw:${CARD},0"
+HW="/sys/class/sound/hwC0D0/reconfig"
+
+have() { command -v "$1" >/dev/null 2>&1; }
+pin1d() {
+	sed -n '/^Node 0x1d /,/^Node 0x1e /p' "/proc/asound/card$CARD/codec#0" 2>/dev/null \
+		| sed -n 's/^  Pin Default \(0x[0-9a-f]*\).*/\1/p'
+}
+gen() {
+	python3 - <<'PY'
+import math, struct, sys
+rate, secs, amp, ch = 44100, 2, 0.12, 4
+n = rate * secs
+o = bytearray()
+for i in range(n):
+    env = min(1.0, i / (rate * 0.05), (n - i) / (rate * 0.05))
+    v = int(amp * env * 32767 * math.sin(2 * math.pi * 440 * i / rate))
+    o += struct.pack('<' + 'h' * ch, *([v] * ch))
+try:
+    sys.stdout.buffer.write(bytes(o)); sys.stdout.buffer.flush()
+except BrokenPipeError:
+    sys.exit(0)
+PY
+}
+
+# Play the tone, waiting out the audio server if it still holds the device -
+# likely right after a resume. Success comes from the EXIT STATUS: aplay always
+# writes a banner to stderr, and treating that as failure has bitten this
+# project twice already.
+tone() {
+	local err
+	for _ in 1 2 3 4 5 6 7 8 9 10; do
+		err=$(gen | aplay -q -D "$DEV" -f S16_LE -r 44100 -c 4 2>&1 >/dev/null) && return 0
+		case "$err" in
+			*[Bb]usy*|*belegt*) sleep 1 ;;
+			*) printf '    could not play: %s\n' "${err:-unknown error}"; return 1 ;;
+		esac
+	done
+	printf '    device stayed busy; pause anything playing audio and retry\n'
+	return 1
+}
+# The kernel refuses `reconfig` while the codec is in use, and the audio server
+# holds it. Stop the user's PipeWire stack around the re-probe and always put it
+# back, even on failure or Ctrl-C. Sockets are stopped too, otherwise socket
+# activation restarts the daemons immediately.
+USER_NAME="${SUDO_USER:-}"
+USER_UID=""
+[ -n "$USER_NAME" ] && USER_UID=$(id -u "$USER_NAME" 2>/dev/null)
+
+as_user() {
+	[ -n "$USER_NAME" ] || return 1
+	sudo -u "$USER_NAME" XDG_RUNTIME_DIR="/run/user/$USER_UID" "$@" 2>/dev/null
+}
+
+AUDIO_UNITS="wireplumber pipewire-pulse pipewire pipewire.socket pipewire-pulse.socket"
+
+stop_audio() { as_user systemctl --user stop $AUDIO_UNITS; }
+start_audio() {
+	as_user systemctl --user start pipewire.socket pipewire-pulse.socket \
+		pipewire pipewire-pulse wireplumber
+}
+AUDIO_STOPPED=0
+restore_audio() {
+	if [ "$AUDIO_STOPPED" = 1 ]; then
+		printf '\n  restoring the audio server ...\n'
+		start_audio
+		AUDIO_STOPPED=0
+	fi
+}
+trap restore_audio EXIT INT TERM
+
+ask() {
+	local r
+	while true; do
+		printf '  %s [y/n] ' "$1"; read -r r || return 2
+		case "$r" in [yYjJ]*) return 0 ;; [nN]*) return 1 ;; esac
+	done
+}
+
+printf '\nMacBook9,1 resume recovery experiment\n\n'
+for t in aplay python3; do
+	have "$t" || { printf 'missing tool: %s\n' "$t" >&2; exit 2; }
+done
+[ -w "$HW" ] || { printf '  Need root to write %s\n  Re-run with sudo.\n\n' "$HW"; exit 1; }
+
+printf '  Run this only after a suspend/resume that left the speakers silent.\n'
+printf '  Headphones unplugged. Tone is 440 Hz at 12%% of full scale.\n\n'
+
+printf '  pin 0x1d before: %s   (working value is 0x90100110)\n\n' "$(pin1d)"
+
+printf '  Step 1 - confirm the speakers are currently silent.\n'
+tone
+if ask "Did you hear that tone?"; then
+	printf '\n  Speakers are already working; this experiment needs a broken state.\n\n'
+	exit 0
+fi
+
+printf '\n  Step 2 - re-probing the codec ...\n'
+if [ -z "$USER_NAME" ]; then
+	printf '  Cannot identify the desktop user (SUDO_USER unset).\n'
+	printf '  Run this via sudo from your normal session, not as a root login.\n\n'
+	exit 1
+fi
+printf '    releasing the audio server so the codec is free ...\n'
+stop_audio
+AUDIO_STOPPED=1
+sleep 2
+PROBES_BEFORE=$(journalctl -b -k --no-pager 2>/dev/null | grep -c 'A1534: probe bring-up')
+if ! echo 1 > "$HW" 2>/dev/null; then
+	printf '    reconfig still refused: something else holds the codec.\n'
+	printf '    Close any application using audio and retry.\n'
+	exit 1
+fi
+sleep 3
+
+# A successful write is not proof the codec was re-probed. Verify it emitted a
+# fresh probe marker; without this the experiment can report "re-probing does
+# not help" when no re-probe actually happened.
+PROBES_AFTER=$(journalctl -b -k --no-pager 2>/dev/null | grep -c 'A1534: probe bring-up')
+if [ "$PROBES_AFTER" -gt "$PROBES_BEFORE" ]; then
+	REPROBED=yes
+else
+	REPROBED=no
+fi
+printf '  re-probe actually ran: %s  (probe markers %s -> %s)\n' \
+	"$REPROBED" "$PROBES_BEFORE" "$PROBES_AFTER"
+printf '  pin 0x1d after:  %s\n\n' "$(pin1d)"
+
+printf '  Step 3 - test again (audio server still stopped, playing directly).\n'
+tone
+if ask "Did you hear the tone NOW, after the re-probe?"; then
+	RESULT="RECOVERED"
+else
+	RESULT="STILL SILENT"
+fi
+
+printf '\n  Result: %s\n' "$RESULT"
+printf '    pin 0x1d after re-probe: %s\n\n' "$(pin1d)"
+case "$RESULT" in
+	RECOVERED)
+		printf '  => Re-running the probe recovers the speakers, so the driver can\n'
+		printf '     do the same thing on resume. This is fixable.\n' ;;
+	*)
+		if [ "$REPROBED" = yes ]; then
+			printf '  => Re-probing ran and did not recover them. The working state is\n'
+			printf '     set by the Mac firmware at power-on; a deep sleep loses it and\n'
+			printf '     the driver cannot reconstruct it. A limitation to document,\n'
+			printf '     not a bug to keep chasing.\n'
+		else
+			printf '  => INCONCLUSIVE: the reconfig write succeeded but no fresh probe\n'
+			printf '     marker appeared, so the codec was not actually re-probed.\n'
+			printf '     This says nothing yet about whether re-probing would help.\n'
+		fi ;;
+esac
+printf '\n  Kernel log since the re-probe:\n'
+journalctl -b -k --no-pager 2>/dev/null | grep 'A1534' | tail -4 | sed 's/^/    /'
+printf '\n  Please paste this whole result back.\n\n'

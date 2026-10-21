@@ -1,0 +1,33 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+# kernel build artifacts
+*.o
+*.ko
+*.mod
+*.mod.c
+*.symvers
+*.order
+.*.cmd
+.tmp_versions/
+
+# Upstream-derived sources. None of these is written by this project, and none
+# is tracked; packaging/fetch-upstream.sh reassembles every one of them, at a
+# kernel tag it resolves from the installed headers.
+#
+# fetched verbatim from git.kernel.org, one directory per kernel series
+upstream/*/cs420x.c
+kheaders/*/generic.h
+kheaders/*/hda_auto_parser.h
+kheaders/*/hda_beep.h
+kheaders/*/hda_jack.h
+kheaders/*/hda_local.h
+# upstream/<series>/cs420x.c + local-changes.patch
+/[0-9]*.[0-9]*/cs420x.c
+# vendored/ORIGINAL-a1534_sequence.h + vendored/a1534_sequence.patch, offline
+vendored/a1534_sequence.h
+# generated from the assembled tree, and verified by the Makefile's check:
+# target inside the packaged copy
+UPSTREAM.sha256
+UPSTREAM.lock
+vendored/PROVENANCE.sha256
+# the shipped series, one per line
+kheaders/KERNEL-SERIES

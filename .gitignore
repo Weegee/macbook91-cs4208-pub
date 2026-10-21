@@ -1,0 +1,21 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+# Build and test output only.
+*.pkg.tar.zst
+
+# The source tarball and built packages (make dist, make arch-pkg) and the
+# makepkg work area they are built in.
+/dist/
+/build/
+# A makepkg run directly in packaging/arch, and the staged inputs of an
+# earlier make-package.sh.
+packaging/arch/pkg/
+packaging/arch/src/
+packaging/pkg/
+packaging/src/
+packaging/cs420x-a1534.tar.zst
+packaging/macbook91-audio-verify
+
+# Kernel sources fetched by packaging/fetch-upstream.sh, kept so a tree can be
+# reassembled offline. Hash-checked against packaging/upstream.lock on every
+# use, so the cache cannot smuggle anything in.
+packaging/.upstream-cache/

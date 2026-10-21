@@ -1,0 +1,270 @@
+#!/usr/bin/env bash
+# SPDX-License-Identifier: GPL-3.0-or-later
+#
+# SUPERSEDED - use macbook91-runner cycle. Kept as evidence of what was run;
+# nothing new should be added here.
+#
+# One-shot triage for the MacBook9,1 deep-suspend defect.
+#
+#   sudo macbook91-suspend-triage
+#
+# Run it AFTER a resume, while the internal speakers are silent.
+#
+# HONESTY RULES, learned the hard way in this project
+#   - every tone is checked: if aplay did not actually play, the step reports
+#     BLOCKED and does NOT ask you whether you heard anything. A question
+#     asked after a failed playback produces a confident wrong answer.
+#   - every escalation is checked: if the module could not be unloaded, that
+#     step reports BLOCKED rather than "still silent".
+#   - PipeWire is masked, not merely stopped. Stopping the service alone lets
+#     socket activation restart it, which is what silently invalidated the
+#     first version of this script.
+#
+# Safety: 440 Hz at 12% of full scale, never speaker-test. Records no audio.
+# Restores PipeWire on every exit (trap). The module reload and the PCI
+# remove/rescan run inline in their steps; interrupted between remove and
+# rescan, the controller stays removed until: echo 1 > /sys/bus/pci/rescan
+set -uo pipefail
+
+TS=$(date -u +%Y%m%dT%H%M%SZ)
+OUT=${SUDO_USER:+/home/$SUDO_USER}/a1534-triage-$TS.txt
+[ -d "$(dirname "$OUT")" ] || OUT=/tmp/a1534-triage-$TS.txt
+BEFORE=/tmp/a1534-triage-$TS-codec-before.txt
+AFTER=/tmp/a1534-triage-$TS-codec-after.txt
+TOOLS=$(cd "$(dirname "$0")" && pwd)
+HDA_PCI=0000:00:1f.3
+SUMMARY=()
+
+log()   { printf '%s\n' "$*" >>"$OUT"; }
+head2() { log ""; log "== $* =="; log ""; }
+say()   { printf '%s\n' "$*"; }
+verdict(){ SUMMARY+=("$1"); say "  -> $1"; }
+
+[ "$(id -u)" = 0 ] || { say "needs root: sudo $0"; exit 1; }
+REALUSER=${SUDO_USER:-$(logname 2>/dev/null || id -un)}
+RUID=$(id -u "$REALUSER")
+asuser() { sudo -u "$REALUSER" XDG_RUNTIME_DIR=/run/user/$RUID "$@" 2>/dev/null; }
+
+PW_UNITS="pipewire.socket pipewire-pulse.socket pipewire.service pipewire-pulse.service wireplumber.service"
+
+# Sets HOLDERS in the CALLER. Never call this in a command substitution:
+# that runs it in a subshell and loses the assignment - the same class of bug
+# that once left PipeWire masked with no flag anywhere to notice it.
+HOLDERS=""
+free_audio() {
+	asuser systemctl --user mask $PW_UNITS >/dev/null 2>&1
+	asuser systemctl --user stop $PW_UNITS  >/dev/null 2>&1
+	sleep 2
+	HOLDERS=$(fuser -v /dev/snd/pcmC0D0p 2>&1 | tail -n +2 | tr -s ' ' | cut -d' ' -f3 | sort -u | tr '\n' ' ')
+	HOLDERS=${HOLDERS:-none}
+	log "device holders after masking PipeWire: $HOLDERS"
+}
+
+# Deliberately unconditional. Unmasking units that were never masked is a
+# no-op, whereas failing to unmask leaves the machine with no audio server -
+# so this must not depend on a flag being right.
+restore_audio() {
+	asuser systemctl --user unmask $PW_UNITS pipewire-session-manager.service >/dev/null 2>&1
+	asuser systemctl --user daemon-reload >/dev/null 2>&1
+	asuser systemctl --user start pipewire.socket pipewire.service wireplumber.service >/dev/null 2>&1
+	sleep 3
+	local st
+	st=$(asuser systemctl --user is-active pipewire.service wireplumber.service | paste -sd' ')
+	log "PipeWire after restore: $st"
+	case "$st" in
+	*inactive*|*failed*|"")
+		say ""
+		say "  WARNING: PipeWire did not come back. Run this by hand:"
+		say "    systemctl --user unmask $PW_UNITS"
+		say "    systemctl --user start pipewire.socket pipewire.service wireplumber.service"
+		;;
+	*)  say "  PipeWire restored ($st)" ;;
+	esac
+}
+trap restore_audio EXIT INT TERM
+
+ask() {
+	local a
+	printf '  ?  %s [y/n] ' "$1" >/dev/tty
+	read -r a </dev/tty || { echo no; return; }
+	case "$a" in y|Y|j|J) echo yes;; *) echo no;; esac
+}
+
+# Plays the tone. Returns 0 only if aplay genuinely wrote the whole buffer.
+# Its stderr is captured, never discarded: "silent" must never be able to mean
+# "playback failed and nobody looked".
+TONE_ERR=""
+TONE_CH=4
+tone() {
+	local err rc
+	err=$(python3 -c "
+import math, struct, sys
+ch = $TONE_CH
+n = int(44100 * 1.5)
+b = bytearray()
+for i in range(n):
+    v = int(0.12 * 32767 * math.sin(2 * math.pi * 440 * i / 44100))
+    b += struct.pack('<%dh' % ch, *([v] * ch))
+sys.stdout.buffer.write(bytes(b))
+" 2>/dev/null | aplay -D hw:0,0 -f S16_LE -r 44100 -c "$TONE_CH" -t raw - 2>&1)
+	rc=$?
+	TONE_ERR=$(printf '%s' "$err" | grep -viE '^Wiedergabe|^Playing' | head -3 | tr '\n' '; ')
+	log "aplay rc=$rc err=${TONE_ERR:-none}"
+	return $rc
+}
+
+# listen NAME  -> asks only when the tone actually played
+listen() {
+	local name="$1" r
+	if ! tone; then
+		verdict "$name: BLOCKED - playback failed (${TONE_ERR:-unknown})"
+		return 2
+	fi
+	r=$(ask "Did you hear the tone?")
+	log "$name heard: $r"
+	if [ "$r" = yes ]; then verdict "$name: AUDIBLE"; return 0
+	else verdict "$name: silent (playback confirmed OK)"; return 1; fi
+}
+
+pin1d() {
+	python3 -c "
+import fcntl, struct
+fd = open('/dev/snd/hwC0D0','rb+',buffering=0)
+o = fcntl.ioctl(fd, 0xC0084811, struct.pack('II', (0x1d<<24)|(0xf1c<<8), 0))
+print('0x%08x' % struct.unpack('II', o)[1])
+" 2>/dev/null || echo unreadable
+}
+
+pinstate() { sed -n "/^Node $1 /,/^Node /p" /proc/asound/card0/codec#0 2>/dev/null | grep -E "Amp-Out vals|Pin-ctls" | tr '\n' ' '; }
+
+say "MacBook9,1 suspend triage -> $OUT"
+log "MacBook9,1 deep-suspend triage, $TS"
+log "kernel  $(uname -r)"
+log "module  $(cat /sys/module/snd_hda_codec_cs420x/version 2>/dev/null || echo none)"
+
+head2 "A. State as found"
+P=$(pin1d); log "pin 0x1d = $P"
+[ "$P" = "0x90100110" ] && { log "marker INTACT"; say "  pin 0x1d intact"; } || { log "marker LOST"; say "  pin 0x1d LOST"; }
+log ""; log "--- hw params ---"; aplay --dump-hw-params -D hw:0,0 /dev/zero 2>&1 | head -20 >>"$OUT"
+log ""; log "--- mixer ---";     amixer -c0 contents 2>/dev/null >>"$OUT"
+log ""; log "--- wpctl ---";     asuser wpctl status >>"$OUT"
+log ""; log "--- cards ---";     asuser pactl list cards >>"$OUT"
+
+# ---- is the A1534 path even active? -------------------------------------
+# Without this check the rest is worthless. After a re-probe the codec can
+# report its own vendor id as the subsystem id, the gate declines, the driver
+# falls back to a generic 2-channel PCM, and every 4-channel playback fails
+# with "channel count not supported" - which reads as silence.
+SSID=$(grep -m1 "Subsystem Id" /proc/asound/card0/codec#0 2>/dev/null | awk '{print $3}')
+CHMAX=$(aplay --dump-hw-params -D hw:0,0 /dev/zero 2>&1 | awk -F': ' '/^CHANNELS/{print $2}' | tr -d '[]' | awk '{print $NF}')
+log "codec Subsystem Id = ${SSID:-unknown}"
+log "hw:0,0 channels    = ${CHMAX:-unknown}"
+say "  codec SSID $SSID, hw:0,0 offers ${CHMAX:-?} channels"
+if [ "${CHMAX:-0}" = 4 ]; then
+	A1534_ACTIVE=yes
+	TONE_CH=4
+else
+	A1534_ACTIVE=no
+	TONE_CH=${CHMAX:-2}
+	verdict "DRIVER STATE: A1534 path is NOT active - hw:0,0 offers ${CHMAX:-?} channels, not 4"
+	say ""
+	say "  The driver is running its generic fallback, so nothing measured from"
+	say "  here would mean anything. This happens when the codec subsystem id is"
+	say "  lost (it reads $SSID instead of 0x106b6500), which a re-probe can do."
+	say "  Reboot, then run this again straight after a resume."
+	head2 "SUMMARY"; for s in "${SUMMARY[@]}"; do log "  $s"; done
+	say ""; say "===== SUMMARY ====="; printf '%s\n' "${SUMMARY[@]}"; say "detail: $OUT"
+	exit 0
+fi
+log "A1534 path active: $A1534_ACTIVE"
+
+head2 "B. Codec dump before any experiment"
+"$TOOLS/macbook91-codec-dump" "$BEFORE" >/dev/null 2>&1 && log "-> $BEFORE"
+
+head2 "C. Free the device"
+say ""
+say "Masking PipeWire so the raw device can be opened and the module unloaded."
+free_audio
+say "  device holders now: $HOLDERS"
+
+head2 "D. Baseline tone, straight to hw:0,0"
+say ""
+say "STEP 1  quiet 440 Hz tone, directly to the codec."
+listen "BASELINE"; BASE=$?
+if [ $BASE = 2 ]; then
+	say ""
+	say "  Playback itself failed, so nothing below could be measured."
+	head2 "SUMMARY"; for s in "${SUMMARY[@]}"; do log "  $s"; done
+	say ""; say "===== SUMMARY ====="; printf '%s\n' "${SUMMARY[@]}"; say "detail: $OUT"
+	exit 0
+fi
+if [ $BASE = 0 ]; then
+	head2 "SUMMARY"; for s in "${SUMMARY[@]}"; do log "  $s"; done
+	say ""; say "===== SUMMARY ====="; printf '%s\n' "${SUMMARY[@]}"; say "detail: $OUT"; exit 0
+fi
+
+head2 "E. Amplifier I2C bus, with 0x20 as a negative control"
+"$TOOLS/macbook91-dfet-probe" >>"$OUT" 2>&1
+verdict "AMP I2C: recorded in the file"
+
+head2 "F. Escalation 1: unload and reload the codec module"
+say ""
+say "STEP 2  reloading the codec driver..."
+if modprobe -r snd_hda_codec_cs420x 2>>"$OUT"; then
+	sleep 1
+	modprobe snd_hda_codec_cs420x 2>>"$OUT"
+	sleep 3
+	log "pin 0x1d after reload = $(pin1d)"
+	listen "MODULE RELOAD"
+else
+	log "modprobe -r failed; module still loaded"
+	verdict "MODULE RELOAD: BLOCKED - module in use, reload did not happen"
+fi
+
+head2 "G. Escalation 2: remove and rescan the HDA PCI controller"
+say ""
+say "STEP 3  hot-removes the audio controller and rescans the bus (reversible)."
+if [ "$(ask 'Run the controller reset?')" = yes ]; then
+	log "pci before: $(lspci -s ${HDA_PCI#0000:} 2>/dev/null)"
+	printf 1 > "/sys/bus/pci/devices/$HDA_PCI/remove" 2>>"$OUT"
+	sleep 2
+	printf 1 > /sys/bus/pci/rescan 2>>"$OUT"
+	sleep 6
+	log "pci after:  $(lspci -s ${HDA_PCI#0000:} 2>/dev/null)"
+	log "pin 0x1d after rescan = $(pin1d)"
+	if [ -e /dev/snd/pcmC0D0p ]; then
+		listen "CONTROLLER RESET"
+	else
+		verdict "CONTROLLER RESET: BLOCKED - the PCM device did not come back"
+	fi
+else
+	verdict "CONTROLLER RESET: skipped"
+fi
+
+head2 "H. Codec dump after every experiment"
+"$TOOLS/macbook91-codec-dump" "$AFTER" >/dev/null 2>&1 && log "-> $AFTER"
+log ""; log "--- diff before vs after ---"
+diff -u "$BEFORE" "$AFTER" >>"$OUT" 2>&1
+log "(nothing above means no register changed)"
+
+head2 "I. Headphones"
+say ""
+say "STEP 4  headphone check (PipeWire is still masked; this is a raw test)."
+ask "Plug your headphones in now, then answer y" >/dev/null
+sleep 3
+log "pin 0x10: $(pinstate 0x10)"
+log "pin 0x1d: $(pinstate 0x1d)"
+log "jack:     $(amixer -c0 cget numid=12 2>/dev/null | tail -1)"
+log "--- audio log, last 3 minutes ---"
+journalctl -b --no-pager --since "-3 min" 2>/dev/null | grep -iE "snd_hda|A1534" | tail -30 >>"$OUT"
+listen "HEADPHONES"
+
+restore_audio
+head2 "SUMMARY"
+for s in "${SUMMARY[@]}"; do log "  $s"; done
+say ""
+say "================= SUMMARY (paste this) ================="
+printf '%s\n' "${SUMMARY[@]}"
+say ""
+say "full detail: $OUT"
+say "========================================================"

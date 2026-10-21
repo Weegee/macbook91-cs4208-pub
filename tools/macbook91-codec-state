@@ -1,0 +1,359 @@
+#!/usr/bin/env python3
+# SPDX-License-Identifier: GPL-3.0-or-later
+"""A comparable snapshot of the CS4208's state, and a diff of two of them.
+
+This replaces macbook91-codec-dump for new work. The differences are the whole
+point:
+
+  * every field is asked only of a widget whose own capabilities say it
+    supports the verb, so an unsupported read is recorded as "unsupported"
+    and never as a value
+  * a failed ioctl is recorded as "error", never as 0 - a dump in which
+    errors and zeroes are indistinguishable cannot support "unchanged"
+  * the node list comes from the codec's own NODE_COUNT parameter, not from a
+    hardcoded table, so nothing is silently missed or silently duplicated
+  * it does not call itself read-only while writing. Reading a processing
+    coefficient REQUIRES writing SET_COEF_INDEX; that is stated, the entry
+    index is saved and put back, and it is the only write here
+
+Needs CAP_SYS_RAWIO.
+
+    macbook91-codec-state capture [--card N] FILE.json
+    macbook91-codec-state diff BEFORE.json AFTER.json
+"""
+
+import fcntl
+import json
+import struct
+import sys
+import time
+
+HDA_IOCTL_VERB_WRITE = 0xC0084811
+ROOT = 0x00
+
+PARAMETERS = 0xF00
+AC_PAR_VENDOR_ID, AC_PAR_SUBSYSTEM_ID, AC_PAR_REV_ID = 0x00, 0x01, 0x02
+AC_PAR_NODE_COUNT, AC_PAR_FUNCTION_TYPE = 0x04, 0x05
+AC_PAR_AUDIO_WIDGET_CAP, AC_PAR_PCM, AC_PAR_STREAM = 0x09, 0x0A, 0x0B
+AC_PAR_PIN_CAP, AC_PAR_AMP_IN_CAP, AC_PAR_CONNLIST_LEN = 0x0C, 0x0D, 0x0E
+AC_PAR_POWER_STATE, AC_PAR_PROC_CAP, AC_PAR_GPIO_CAP = 0x0F, 0x10, 0x11
+AC_PAR_AMP_OUT_CAP = 0x12
+
+W_STEREO, W_IN_AMP, W_OUT_AMP = 1 << 0, 1 << 1, 1 << 2
+W_FORMAT_OVRD, W_STRIPE, W_PROC, W_UNSOL = 1 << 4, 1 << 5, 1 << 6, 1 << 7
+W_CONN_LIST, W_DIGITAL, W_POWER = 1 << 8, 1 << 9, 1 << 10
+W_CHAN_CNT_EXT = 7 << 13
+
+TYPE_AUDIO_OUT, TYPE_AUDIO_IN, TYPE_PIN = 0x0, 0x1, 0x4
+TYPE_NAMES = {0x0: 'audio-out', 0x1: 'audio-in', 0x2: 'mixer', 0x3: 'selector',
+              0x4: 'pin', 0x5: 'power', 0x6: 'volume-knob', 0x7: 'beep',
+              0xF: 'vendor'}
+
+GET_CONV = 0xF06          # NOT 0xf01 - that is GET_CONNECT_SEL
+GET_STREAM_FORMAT = 0xA00
+GET_AMP_GAIN_MUTE = 0xB00
+GET_PROC_STATE = 0xF03
+GET_POWER_STATE = 0xF05
+GET_CONNECT_SEL = 0xF01
+GET_PIN_WIDGET_CONTROL = 0xF07
+GET_UNSOLICITED_RESPONSE = 0xF08
+GET_PIN_SENSE = 0xF09
+GET_EAPD_BTLENABLE = 0xF0C
+GET_DIGI_CONVERT_1 = 0xF0D
+GET_CONFIG_DEFAULT = 0xF1C
+GET_GPIO_DATA, GET_GPIO_MASK, GET_GPIO_DIRECTION = 0xF15, 0xF16, 0xF17
+GET_SDI_SELECT = 0xF04
+GET_STRIPE_CONTROL = 0xF24
+GET_CVT_CHAN_COUNT = 0xF2D
+GET_SUBSYSTEM_ID = 0xF20
+GET_COEF_INDEX, GET_PROC_COEF, SET_COEF_INDEX = 0xD00, 0xC00, 0x500
+
+UNSUP = '<unsupported>'
+
+
+class Codec:
+    def __init__(self, card=0):
+        self.fd = open('/dev/snd/hwC%dD0' % card, 'rb+', buffering=0)
+        self.errors = 0
+
+    def raw(self, nid, verb, parm):
+        cmd = ((nid & 0xFF) << 24) | ((verb & 0xFFFF) << 8) | (parm & 0xFF)
+        out = fcntl.ioctl(self.fd, HDA_IOCTL_VERB_WRITE,
+                          struct.pack('II', cmd, 0))
+        return struct.unpack('II', out)[1]
+
+    def get(self, nid, verb, parm=0):
+        """A read that reports what happened. Never turns a failure into 0."""
+        try:
+            v = self.raw(nid, verb, parm)
+        except OSError as e:
+            self.errors += 1
+            return '<error %s>' % e.errno
+        if v == 0xFFFFFFFF:
+            self.errors += 1
+            return '<no-response>'
+        return v
+
+    def param(self, nid, p):
+        return self.get(nid, PARAMETERS, p)
+
+
+def amp_verb(output, left):
+    """GET_AMP_GAIN_MUTE with its selector in the verb field.
+
+    The selector is bit 15 (output) and bit 13 (left) of the 16-bit payload,
+    but the hwdep ioctl passes only 8 parameter bits, so those two bits must
+    ride in the verb: 0xb00 | (selector >> 8). The parameter is the index.
+    See macbook91-codec-dump, which does the same.
+    """
+    return GET_AMP_GAIN_MUTE | (0x80 if output else 0) | (0x20 if left else 0)
+
+
+def h(v, w=2):
+    return v if isinstance(v, str) else '%0*x' % (w, v)
+
+
+def capture(card=0):
+    c = Codec(card)
+    st = {'tool': 'macbook91-codec-state', 'version': '1',
+          'utc': time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime()),
+          'uptime_s': float(open('/proc/uptime').read().split()[0]),
+          'nodes': {}}
+
+    st['vendor_id'] = h(c.param(ROOT, AC_PAR_VENDOR_ID), 8)
+    st['revision_id'] = h(c.param(ROOT, AC_PAR_REV_ID), 8)
+    nc = c.param(ROOT, AC_PAR_NODE_COUNT)
+    if isinstance(nc, str):
+        st['error'] = 'cannot read NODE_COUNT from the root node: %s' % nc
+        return st, c
+    fg_start, fg_num = (nc >> 16) & 0x7FFF, nc & 0x7FFF
+
+    afg = None
+    for nid in range(fg_start, fg_start + fg_num):
+        ft = c.param(nid, AC_PAR_FUNCTION_TYPE)
+        if not isinstance(ft, str) and (ft & 0x7F) == 0x01:
+            afg = nid
+            break
+    if afg is None:
+        st['error'] = 'no audio function group among nodes %#x..%#x' % (
+            fg_start, fg_start + fg_num - 1)
+        return st, c
+    st['afg_nid'] = afg
+    # Both, the way Linux does it (sound/hda/core/device.c:81-103): the
+    # parameter on the ROOT node first, and the verb on the function group as
+    # the fallback when that is 0 or -1. On this codec the parameter is 0 and
+    # the verb is the real answer, which is why the verb is the field that
+    # moves when firmware state is lost.
+    st['subsystem_id_param_root'] = h(c.param(ROOT, AC_PAR_SUBSYSTEM_ID), 8)
+    st['subsystem_id_verb'] = h(c.get(afg, GET_SUBSYSTEM_ID), 8)
+    st['afg_power'] = h(c.get(afg, GET_POWER_STATE))
+
+    gpio_cap = c.param(afg, AC_PAR_GPIO_CAP)
+    st['gpio_cap'] = h(gpio_cap, 8)
+    if not isinstance(gpio_cap, str) and (gpio_cap & 0xFF) or \
+            (not isinstance(gpio_cap, str) and (gpio_cap >> 8) & 0xFF):
+        st['gpio'] = {'data': h(c.get(afg, GET_GPIO_DATA)),
+                      'mask': h(c.get(afg, GET_GPIO_MASK)),
+                      'direction': h(c.get(afg, GET_GPIO_DIRECTION))}
+    else:
+        st['gpio'] = UNSUP
+
+    wnc = c.param(afg, AC_PAR_NODE_COUNT)
+    if isinstance(wnc, str):
+        st['error'] = 'cannot read NODE_COUNT from the AFG: %s' % wnc
+        return st, c
+    w_start, w_num = (wnc >> 16) & 0x7FFF, wnc & 0x7FFF
+    st['widget_range'] = ['%#04x' % w_start, '%#04x' % (w_start + w_num - 1)]
+
+    for nid in range(w_start, w_start + w_num):
+        caps = c.param(nid, AC_PAR_AUDIO_WIDGET_CAP)
+        n = {'wcaps': h(caps, 8)}
+        st['nodes']['%#04x' % nid] = n
+        if isinstance(caps, str):
+            continue
+        wtype = (caps >> 20) & 0xF
+        n['type'] = TYPE_NAMES.get(wtype, 'unknown-%x' % wtype)
+
+        n['power'] = h(c.get(nid, GET_POWER_STATE)) if caps & W_POWER else UNSUP
+
+        if wtype in (TYPE_AUDIO_OUT, TYPE_AUDIO_IN):
+            n['converter'] = h(c.get(nid, GET_CONV), 2)
+            n['stream_format'] = h(c.get(nid, GET_STREAM_FORMAT), 4)
+            n['digi_convert'] = h(c.get(nid, GET_DIGI_CONVERT_1)) \
+                if caps & W_DIGITAL else UNSUP
+            # Stripe control says across how many SDO links the controller
+            # spreads this converter's data. The macOS trace reads it on
+            # 0x02-0x05, 0x0a, 0x0b and 0x0e and expects 0x00100000. It is a
+            # readable, resettable, converter-specific field that nothing in
+            # this project had ever captured - which is exactly the kind of
+            # gap a fixed verb list leaves.
+            n['stripe_control'] = h(c.get(nid, GET_STRIPE_CONTROL), 8) \
+                if caps & W_STRIPE else UNSUP
+            n['cvt_chan_count'] = h(c.get(nid, GET_CVT_CHAN_COUNT)) \
+                if caps & W_CHAN_CNT_EXT else UNSUP
+            n['sdi_select'] = h(c.get(nid, GET_SDI_SELECT)) \
+                if wtype == TYPE_AUDIO_IN else UNSUP
+            n['pcm_cap'] = h(c.param(nid, AC_PAR_PCM), 8) \
+                if caps & W_FORMAT_OVRD else UNSUP
+        else:
+            n['converter'] = n['stream_format'] = n['digi_convert'] = UNSUP
+            n['stripe_control'] = n['cvt_chan_count'] = UNSUP
+            n['sdi_select'] = n['pcm_cap'] = UNSUP
+
+        if wtype == TYPE_PIN:
+            pincap = c.param(nid, AC_PAR_PIN_CAP)
+            n['pincap'] = h(pincap, 8)
+            n['config_default'] = h(c.get(nid, GET_CONFIG_DEFAULT), 8)
+            n['pin_ctl'] = h(c.get(nid, GET_PIN_WIDGET_CONTROL))
+            # Presence detect is only meaningful when the pin advertises it,
+            # and it is volatile: a jack moving between two captures is a real
+            # change, not drift, so it is kept but labelled.
+            n['pin_sense_volatile'] = h(c.get(nid, GET_PIN_SENSE), 8) \
+                if not isinstance(pincap, str) and (pincap & (1 << 2)) else UNSUP
+            n['eapd'] = h(c.get(nid, GET_EAPD_BTLENABLE)) \
+                if not isinstance(pincap, str) and (pincap & (1 << 16)) else UNSUP
+        else:
+            n['config_default'] = n['pin_ctl'] = UNSUP
+            n['pin_sense_volatile'] = n['eapd'] = UNSUP
+
+        n['unsol'] = h(c.get(nid, GET_UNSOLICITED_RESPONSE)) \
+            if caps & W_UNSOL else UNSUP
+
+        if caps & W_CONN_LIST:
+            n['connect_sel'] = h(c.get(nid, GET_CONNECT_SEL))
+        else:
+            n['connect_sel'] = UNSUP
+
+        # Amplifier gain/mute, per channel (left first), index 0, only
+        # where the widget has one.
+        for which, bit, output in (('out', W_OUT_AMP, True),
+                                   ('in', W_IN_AMP, False)):
+            if not (caps & bit):
+                n['amp_' + which] = UNSUP
+                continue
+            vals = []
+            for left in (True, False) if caps & W_STEREO else (True,):
+                vals.append(h(c.get(nid, amp_verb(output, left))))
+            n['amp_' + which] = vals
+
+        if caps & W_PROC:
+            pcap = c.param(nid, AC_PAR_PROC_CAP)
+            n['proc_cap'] = h(pcap, 8)
+            n['proc_state'] = h(c.get(nid, GET_PROC_STATE))
+            ncoef = 0 if isinstance(pcap, str) else (pcap >> 8) & 0xFF
+            if ncoef:
+                # The only write in this tool. Reading a coefficient requires
+                # setting the index first; the entry index is restored.
+                saved = c.get(nid, GET_COEF_INDEX)
+                coefs = []
+                for i in range(ncoef):
+                    try:
+                        c.raw(nid, SET_COEF_INDEX, i)
+                    except OSError as e:
+                        coefs.append('<error %s>' % e.errno)
+                        c.errors += 1
+                        continue
+                    v = c.get(nid, GET_PROC_COEF)
+                    coefs.append(h(v, 4))
+                n['coefficients'] = coefs
+                if not isinstance(saved, str):
+                    try:
+                        c.raw(nid, SET_COEF_INDEX, saved & 0xFF)
+                    except OSError:
+                        pass
+                n['coef_index_restored'] = h(c.get(nid, GET_COEF_INDEX))
+                n['coef_index_at_entry'] = h(saved)
+        else:
+            n['proc_cap'] = n['proc_state'] = UNSUP
+
+    st['read_errors'] = c.errors
+    st['fields'] = sum(len(v) for v in st['nodes'].values())
+    return st, c
+
+
+VOLATILE = ('pin_sense_volatile', 'coef_index_at_entry', 'coef_index_restored')
+
+
+def diff(a, b):
+    out = []
+    for k in ('vendor_id', 'subsystem_id_param_root', 'subsystem_id_verb', 'revision_id',
+              'afg_nid', 'afg_power', 'gpio_cap'):
+        if a.get(k) != b.get(k):
+            out.append(('', k, a.get(k), b.get(k)))
+    ga, gb = a.get('gpio'), b.get('gpio')
+    if isinstance(ga, dict) and isinstance(gb, dict):
+        for k in ga:
+            if ga[k] != gb[k]:
+                out.append(('', 'gpio.' + k, ga[k], gb[k]))
+    elif ga != gb:
+        out.append(('', 'gpio', ga, gb))
+
+    nids = sorted(set(a['nodes']) | set(b['nodes']), key=lambda x: int(x, 16))
+    for nid in nids:
+        na, nb = a['nodes'].get(nid, {}), b['nodes'].get(nid, {})
+        for k in sorted(set(na) | set(nb)):
+            if k == 'coefficients':
+                ca, cb = na.get(k, []), nb.get(k, [])
+                for i in range(max(len(ca), len(cb))):
+                    va = ca[i] if i < len(ca) else '<absent>'
+                    vb = cb[i] if i < len(cb) else '<absent>'
+                    if va != vb:
+                        out.append((nid, 'coef[%#04x]' % i, va, vb))
+                continue
+            if na.get(k) != nb.get(k):
+                out.append((nid, k, na.get(k), nb.get(k)))
+    return out
+
+
+def main():
+    args = sys.argv[1:]
+    card = 0
+    if args[:2] == ['capture', '--card'] and len(args) >= 4:
+        if not args[2].isdigit():
+            print(__doc__)
+            return 3
+        card = int(args[2])
+        args = ['capture'] + args[3:]
+    if len(args) >= 2 and args[0] == 'capture':
+        try:
+            st, c = capture(card)
+        except PermissionError:
+            print('BLOCKED: /dev/snd/hwC%dD0 needs CAP_SYS_RAWIO (run as root)' % card,
+                  file=sys.stderr)
+            return 2
+        except FileNotFoundError:
+            print('BLOCKED: no HDA hwdep device', file=sys.stderr)
+            return 2
+        with open(args[1], 'w') as f:
+            json.dump(st, f, indent=1, sort_keys=True)
+        print('captured %d nodes, %d fields, %d read errors -> %s'
+              % (len(st.get('nodes', {})), st.get('fields', 0),
+                 st.get('read_errors', 0), args[1]))
+        if st.get('error'):
+            print('ERROR: %s' % st['error'], file=sys.stderr)
+            return 2
+        print('  vendor %s  subsystem: param %s verb %s  AFG %s  gpio %s'
+              % (st.get('vendor_id'), st.get('subsystem_id_param_root'),
+                 st.get('subsystem_id_verb'), hex(st.get('afg_nid', 0)),
+                 st.get('gpio')))
+        return 0
+
+    if len(sys.argv) >= 4 and sys.argv[1] == 'diff':
+        a = json.load(open(sys.argv[2]))
+        b = json.load(open(sys.argv[3]))
+        d = diff(a, b)
+        real = [x for x in d if x[1] not in VOLATILE]
+        print('%d differing fields (%d after dropping the volatile ones)'
+              % (len(d), len(real)))
+        print('%-7s %-22s %-14s %s' % ('node', 'field', 'before', 'after'))
+        for nid, k, va, vb in d:
+            mark = ' (volatile)' if k in VOLATILE else ''
+            print('%-7s %-22s %-14s %s%s' % (nid or '-', k, va, vb, mark))
+        return 0 if not real else 1
+
+    print(__doc__)
+    return 3
+
+
+if __name__ == '__main__':
+    sys.exit(main())
