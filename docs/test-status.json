@@ -281,8 +281,8 @@
     },
     {
       "id": "pkg.install_20261026_01",
-      "status": "NOT_RUN",
-      "note": "NOT RUN: the package of 20261026.01 was built (make arch-pkg) and audited by tests/run-tests.sh, but not installed; no DKMS build of it ran on an installed system and its modules were not loaded. The hardware gate (docs/RELEASING.md section 4) installs it."
+      "status": "PASS",
+      "note": "PASS 2026-10-26 (install step of the hardware gate only, read from the system logs afterwards): the pacman transaction upgraded 20261021.01-1 to 20261026.01-1 and completed; DKMS built and installed 20261026.01 for 6.18.55-2-cachyos-lts and 7.3.0-4-cachyos (dkms status: installed for both); 71-macbook91-cs4208-series.hook ran and printed no WARNING block. The exit code of the pacman command itself was not captured. The new modules were not loaded (no reboot since the install); that is hw.runtime_20261026_01."
     },
     {
       "id": "hw.runtime_20261026_01",
