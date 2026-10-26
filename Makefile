@@ -53,6 +53,14 @@ install:
 
 	# dkms.conf carries the version from the package, not a hardcoded string.
 	sed -i "s/@PKGVER@/$(VERSION)/" "$(SRCDIR)/dkms.conf"
+	# ... and the kernel series DKMS builds for, from kheaders/KERNEL-SERIES
+	# through the script the pacman hook and the verifier ask, so the three
+	# cannot name different series.
+	re=$$(bash "$(MODULE)/contrib/pacman/kernel-series" --dkms-regex \
+		--series-file "$(SRCDIR)/kheaders/KERNEL-SERIES") && \
+	sed -i "s|@KERNEL_SERIES_RE@|$$(printf '%s' "$$re" | sed 's/[\\&|]/\\&/g')|" \
+		"$(SRCDIR)/dkms.conf" && \
+	grep -q '^BUILD_EXCLUSIVE_KERNEL="^(' "$(SRCDIR)/dkms.conf"
 
 	install -Dm755 tools/macbook91-audio-verify \
 		"$(DESTDIR)$(PREFIX)/bin/macbook91-audio-verify"
@@ -74,6 +82,15 @@ install:
 		"$(DESTDIR)$(PREFIX)/share/macbook91-cs4208/acp/macbook91-cs4208.conf"
 	install -Dm644 "$(SRCDIR)/contrib/acp/macbook91-output-speaker.conf" \
 		"$(DESTDIR)$(PREFIX)/share/macbook91-cs4208/acp/macbook91-output-speaker.conf"
+
+	# One list of supported kernel series for everything that must know it:
+	# the pacman hook, which warns after a transaction about every installed
+	# kernel of another series, and macbook91-audio-verify.
+	install -Dm755 "$(SRCDIR)/contrib/pacman/kernel-series" \
+		"$(DESTDIR)$(PREFIX)/lib/$(MODNAME)/kernel-series"
+	sed -i "s/@PKGVER@/$(VERSION)/" "$(DESTDIR)$(PREFIX)/lib/$(MODNAME)/kernel-series"
+	install -Dm644 "$(SRCDIR)/contrib/pacman/macbook91-cs4208-series.hook" \
+		"$(DESTDIR)$(PREFIX)/share/libalpm/hooks/71-macbook91-cs4208-series.hook"
 
 	install -Dm644 "$(SRCDIR)/README.md" \
 		"$(DESTDIR)$(PREFIX)/share/doc/$(NAME)/README.md"

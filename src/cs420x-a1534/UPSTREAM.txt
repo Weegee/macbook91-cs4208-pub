@@ -1,20 +1,23 @@
 Upstream-derived sources: what is fetched, from where, and why
 ==============================================================
 
-Nothing described in this file is stored in the project's repository. It is
+Nothing fetched or derived here is stored in the project's repository; the
+one tracked input, the A1534 bring-up trace, is never fetched (below). It is
 a specification: packaging/fetch-upstream.sh reads it as prose and implements
 it as code, and every file below is reconstructed at package build time.
 
 Origin:  git.kernel.org  linux/kernel/git/stable/linux.git
 Tags:    one per kernel series, pinned in packaging/upstream.lock. With no
          flag (or --all) the script takes the newest lock tag of every series
-         (today v6.18.55 and v7.2.6). Each --tag names one series explicitly;
+         (the tags packaging/upstream.lock records). Each --tag names one
+         series explicitly;
          --kver or $KDIR resolve a single tag from the UTS_RELEASE of the
          headers they point at: 7.2.6-1-cachyos -> v7.2.6, and 7.2.0-1-cachyos
          -> v7.2, because kernel.org tags the first release of a series
          without the trailing .0. Two tags for one series are refused.
 
-Fetched verbatim, and nothing else ever is, once per series <S> (6.18, 7.2):
+Fetched verbatim, and nothing else ever is, once per series <S> in
+kheaders/KERNEL-SERIES:
 
   upstream/<S>/cs420x.c           sound/hda/codecs/cirrus/cs420x.c
   kheaders/<S>/hda_local.h        sound/hda/common/hda_local.h
@@ -23,7 +26,7 @@ Fetched verbatim, and nothing else ever is, once per series <S> (6.18, 7.2):
   kheaders/<S>/hda_beep.h         sound/hda/common/hda_beep.h
   kheaders/<S>/generic.h          sound/hda/codecs/generic.h
 
-The kernel paths are the same in both series. The lock rows use the
+The kernel paths are the same in every series. The lock rows use the
 series-independent names upstream/cs420x.c and kheaders/*.h, keyed by tag.
 
 Derived from them, offline, by patch --forward --fuzz=0:
@@ -41,8 +44,8 @@ Why the headers are fetched at all
 They are private kernel headers, and no headers package installs them:
 linux-cachyos-headers puts Kconfig files under sound/hda/ and nothing more.
 Measured, not assumed. cs420x.c includes them, so they have to come from
-somewhere, and the kernel's own git is the only primary source. This is the
-single download in the whole build.
+somewhere, and the kernel's own git is the only primary source. These six
+files per series are the only downloads in the whole build.
 
 What guards it
 --------------
@@ -66,9 +69,11 @@ kheaders/KERNEL-SERIES lists the series the headers were fetched for, one per
 line. The Makefile derives the series of the target kernel from its
 utsrelease.h and builds the matching <S>/cs420x.c with kheaders/<S>/; a series
 not in the list is refused, because these are internal structure definitions
-with no ABI promise. dkms.conf carries the same set in BUILD_EXCLUSIVE_KERNEL,
-so DKMS skips other kernels instead of failing them. Adding a series means
-admitting its tag to the lock and rebuilding the package, not overriding the
+with no ABI promise. The root Makefile's install target writes the same set
+into dkms.conf's BUILD_EXCLUSIVE_KERNEL (contrib/pacman/kernel-series
+--dkms-regex), so DKMS skips other kernels instead of failing them, and the
+package's pacman hook warns about each one. Adding a series means admitting
+its tag to the lock and rebuilding the package; there is no override of the
 check.
 
 Local modifications to cs420x.c are listed in LOCAL-CHANGES.md and are kept

@@ -5,6 +5,44 @@ day); the last section summarises the earlier numbering. Only
 `release/20261021.01/` is part of this repository; older release directories
 cited below were removed from it and the citations are history.
 
+## 20261026.01: kernel series 7.3, the LTS kernel as the default, one series list
+
+**Driver behaviour changes.** The A1534 path pins its mainline fixup, and the
+headphone jack callback re-routes a running stream after the bring-up replay.
+Built and tested in software; NOT RUN on hardware when this section was
+written (`docs/test-status.json`, `hw.runtime_20261026_01`).
+
+- Linux 7.3 (tag v7.3, for the CachyOS kernel 7.3.0-4) is a supported series
+  next to 6.18 (LTS) and 7.2. Linux 7.3 added two quirk rows for PCI
+  subsystem 8086:7270 ("MacBookAir 7,2"), which this machine carries; they
+  select CS4208_MBA6, whose pin table marks the speaker pin unconnected. On a
+  match the patched probe now sets the fixup to CS4208_GPIO0 before the quirk
+  tables are consulted, on every series (`local-changes.patch`,
+  `docs/ROOT-CAUSE.md`). VERIFIED: the module builds for
+  6.18.55-2-cachyos-lts, 7.2.11-1-cachyos and 7.3.0-4-cachyos with no
+  compiler diagnostic; the six fetched v7.3 files are byte-identical to
+  CachyOS's kernel tree at tag cachyos-7.3.0-4.
+- Headphone jack: after the bring-up sequence replay both converters' cached
+  stream setup is dropped and a running stream is routed to the converter of
+  the current jack state, also when a prepare ran during the replay; a failed
+  jack-callback registration is logged.
+- One series list: `kheaders/KERNEL-SERIES` drives dkms.conf's
+  `BUILD_EXCLUSIVE_KERNEL`, a new pacman hook (`71-macbook91-cs4208-series.hook`)
+  that warns after every transaction about each installed kernel of a series
+  the package does not support, and the verifier's new "kernel series
+  supported" check. The `A1534_ALLOW_SERIES_MISMATCH` override is gone.
+- Package: depends on `linux-cachyos-lts-headers`; `linux-cachyos-headers` is
+  the one optional kernel. The Arch kernels and clang, lld and llvm are no
+  longer named.
+- Card profile: `analog-stereo` is an output as well, so a kernel that runs
+  the stock codec offers a stereo sink (NOT RUN on hardware).
+- `macbook91-audio-verify` FAILs a mainline pin override on the A1534 path,
+  and its diagnostic archive keeps only this card's `pactl` block.
+- Tests no longer write into the user's state directory; the pin check knows
+  the lockfile; the serial scan is case-sensitive.
+- Source identity: 6.18 `c7580fd70025fa36` (was `2fc8b8ad2d1b2deb`), 7.2
+  `c6661a7c92c95904` (was `3459bbf7be37223c`), 7.3 `6a7014b2db87a081`.
+
 ## 20261021.01: first public release; comments, attribution, licence headers and non-code files only
 
 **No driver behaviour change.** No executable line of the source tarball was

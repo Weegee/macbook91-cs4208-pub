@@ -1,67 +1,4 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
-# clang, lld and llvm are not hard dependencies, because
-# whether they are needed is a property of the kernel, not of this package:
-# the Makefile takes the compiler family from the target kernel's own .config.
-# A dependency that is right on CachyOS and wrong on Arch is not a dependency,
-# it is a guess. So nothing is installed on anyone's behalf here - but the one
-# moment when the answer is knowable and the user is present is this one, so
-# say it now rather than let DKMS fail during the next kernel upgrade.
-_toolchain_note() {
-    local d need_clang=0 need_gcc=0 kernels=0
-    for d in /usr/lib/modules/*/build; do
-        [ -r "$d/.config" ] || continue
-        kernels=$((kernels + 1))
-        if grep -qx 'CONFIG_CC_IS_CLANG=y' "$d/.config"; then
-            need_clang=1
-        elif grep -qx 'CONFIG_CC_IS_GCC=y' "$d/.config"; then
-            need_gcc=1
-        fi
-    done
-
-    if [ "$kernels" -eq 0 ]; then
-        cat <<'MSG'
-
-  NO KERNEL HEADERS FOUND
-
-  DKMS has nothing to build against. Install the headers matching your
-  kernel, for example:
-
-      sudo pacman -S linux-cachyos-headers      # CachyOS default kernel
-      sudo pacman -S linux-cachyos-lts-headers  # CachyOS LTS
-      sudo pacman -S linux-headers              # Arch default kernel
-      sudo pacman -S linux-lts-headers          # Arch LTS
-
-MSG
-        return
-    fi
-
-    if [ "$need_clang" = 1 ] && ! command -v clang >/dev/null 2>&1; then
-        cat <<'MSG'
-
-  MISSING COMPILER FOR THIS KERNEL
-
-  An installed kernel is built with clang (CONFIG_CC_IS_CLANG=y), which the
-  CachyOS kernels are. Its modules cannot be compiled with GCC, so the build
-  needs:
-
-      sudo pacman -S clang lld llvm
-
-MSG
-    fi
-
-    if [ "$need_gcc" = 1 ] && ! command -v gcc >/dev/null 2>&1; then
-        cat <<'MSG'
-
-  MISSING COMPILER FOR THIS KERNEL
-
-  An installed kernel is built with GCC (CONFIG_CC_IS_GCC=y). The build needs:
-
-      sudo pacman -S gcc
-
-MSG
-    fi
-}
-
 post_install() {
     cat <<'MSG'
 
@@ -73,7 +10,7 @@ post_install() {
       sudo reboot
 
   Then check the result. The tool asks a few questions and returns one
-  PASS/FAIL; on failure it writes a single redacted diagnostic archive.
+  PASS/FAIL; on failure it writes a single diagnostic archive.
 
       macbook91-audio-verify
 
@@ -102,18 +39,20 @@ post_install() {
 
   KERNEL SERIES
 
-  The module is built for kernels of Linux series 6.18 (the LTS kernels) and
-  7.2; DKMS skips every other kernel, which keeps its stock codec. The
-  speaker results above are from 7.2. For 6.18 the module builds, but it has
-  not been tested on this hardware yet: run macbook91-audio-verify after the
-  first boot into an LTS kernel.
+MSG
+    printf '  The module is built for kernels of Linux series %s.\n' \
+        "$(/usr/lib/macbook91-cs4208/kernel-series --list 2>/dev/null || echo '(unknown: the series list could not be read)')"
+    cat <<'MSG'
+  DKMS skips every other kernel, which keeps its stock codec and has no
+  speaker output; after every kernel installation a WARNING names each
+  installed kernel of another series. Boot the LTS kernel for audio until
+  the package supports that series.
 
-  clang, lld and llvm are optional: the build uses the compiler the target
-  kernel was built with. If your kernel needs a compiler you do not have,
-  the message below says which one.
+  The CachyOS LTS kernel (linux-cachyos-lts) is the default this package
+  depends on. Install linux-cachyos-headers to have the module built for
+  the current CachyOS kernel as well.
 
 MSG
-    _toolchain_note
 }
 
 # Deliberately the same message: an upgrade shows what an installation shows.

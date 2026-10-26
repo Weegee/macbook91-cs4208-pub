@@ -207,11 +207,12 @@ static int a1534_snapshot_restore(struct hda_codec *codec,
 	 * Write the captured state back UNCONDITIONALLY.
 	 *
 	 * Not "write only what differs". Comparing against a live read on the
-	 * resume path is exactly what produced an earlier build's nonsense - the HDA
-	 * regmap answers AC_VERB_GET_PROC_COEF from its cache while the codec
-	 * is still cache-only during resume, so the "current" values were
-	 * stale and the restore wrote garbage over correct registers. The
-	 * snapshot was taken at probe, outside that window, and is the only
+	 * resume path is exactly what produced an earlier build's nonsense: the
+	 * "current" values it read were stale, and the restore wrote garbage
+	 * over correct registers. That build blamed the HDA regmap cache, but
+	 * snd_hda_codec_read() does not go through it (see a1534_i2c_sync() in
+	 * a1534_i2c.h), so why those reads were stale is not established. The
+	 * snapshot was taken at probe, before any suspend, and is the only
 	 * trustworthy source here. Re-writing a register that already holds
 	 * the right value costs nothing.
 	 */

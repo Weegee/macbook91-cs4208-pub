@@ -52,8 +52,8 @@ recorded in `packaging/upstream.lock` under the pseudo-tag `derived`, and
 
 This sequence is **never downloaded**. Not from leifliddy's repository, not
 from anywhere, not at build time and not at any other time: it is part of this
-repository and part of the package. The one download the build makes covers
-`cs420x.c` and the five private HDA headers, and nothing else.
+repository and part of the package. The build's downloads cover `cs420x.c`
+and the five private HDA headers of each kernel series, and nothing else.
 
 ## Status: EMPIRICAL, NOT DERIVED
 

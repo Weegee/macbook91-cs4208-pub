@@ -27,7 +27,8 @@ indicated** (consistent primary evidence, one inference step), **speculative**
 No driver source existed in this repository when this inventory was written.
 `src/cs420x-a1534/` is that source; its own provenance is recorded in
 `UPSTREAM.txt`, `UPSTREAM.sha256`, `local-changes.patch` and
-`vendored/PROVENANCE.md`, each checked by the Makefile before it compiles.
+`vendored/PROVENANCE.md`. The Makefile checks the two manifests,
+`UPSTREAM.sha256` and `vendored/PROVENANCE.sha256`, before it compiles.
 
 ## B. Legacy / prior-attempt evidence (treat as evidence only)
 
@@ -89,7 +90,8 @@ No driver source existed in this repository when this inventory was written.
 - Every line of the bundled `linux-driver` snapshot, because its upstream
   revision is unrecorded (§B) and mainline has moved on (§C).
 - The A1534 vendor-coefficient sequence, then in the bundled snapshot's
-  `patch_cirrus_a1534_setup.h` — cross-checked against AppleHDA and carried
+  `patch_cirrus_a1534_setup.h` — not verifiable against AppleHDA, which
+  carries no amplifier programming (`docs/HARDWARE-PATH.md` §5.2), and carried
   as `src/cs420x-a1534/vendored/ORIGINAL-a1534_sequence.h` plus
   `a1534_sequence.patch`, from which the build derives `a1534_sequence.h`
   (see `vendored/PROVENANCE.md`), with a checksum the Makefile enforces.

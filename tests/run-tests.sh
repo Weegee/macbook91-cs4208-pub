@@ -636,7 +636,7 @@ echo "== 4b. Release promotion completeness =="
 
 # F-14: .SRCINFO was missing from thirteen
 # consecutive early releases because nothing ever checked for it. Every promoted
-# release directory must carry all six expected files and its own SHA256SUMS
+# release directory must carry all seven expected files and its own SHA256SUMS
 # must verify - this is what makes that omission impossible to repeat.
 #
 # The source tarball is cs420x-a1534.tar.zst in early releases and the
@@ -649,7 +649,7 @@ for rd in "$ROOT"/release/*/; do
 	else
 		RELEASE_SRC="$PKGNAME-$rv.tar"
 	fi
-	RELEASE_EXPECTED="PKGBUILD .SRCINFO SHA256SUMS STATUS.txt $RELEASE_SRC macbook91-cs4208.install"
+	RELEASE_EXPECTED="PKGBUILD .SRCINFO SHA256SUMS STATUS.txt $RELEASE_SRC macbook91-cs4208.install upstream.lock"
 	MISSING=""
 	for f in $RELEASE_EXPECTED; do
 		[ -e "$rd/$f" ] || MISSING="$MISSING $f"
@@ -783,7 +783,8 @@ else
 fi
 
 # The pin can only be checked while it is current: in a clean tree where no
-# tarball input (packaging/mkdist.py's list) changed since the commit that last
+# tarball input (packaging/mkdist.py's list, and the lockfile, fetcher and
+# mkdist.py, which decide the generated half) changed since the commit that last
 # changed the PKGBUILD. Otherwise a stale pin is expected - the next release
 # re-pins - and `make arch-pkg` refuses it anyway.
 PIN=$(sed -n "s/^sha256sums=('\([0-9a-f]*\)').*/\1/p" "$PB")
@@ -793,7 +794,8 @@ if [ "$ASSEMBLED" = 0 ]; then
 elif [ -z "$PIN_COMMIT" ] || [ -n "$(git -C "$ROOT" status --porcelain --untracked-files=no)" ] \
      || ! git -C "$ROOT" diff --quiet "$PIN_COMMIT" HEAD -- \
           src/cs420x-a1534 tools/macbook91-audio-verify Makefile VERSION LICENSE \
-          LICENSES/GPL-2.0-only.txt LICENSES/GPL-2.0-or-later.txt LICENSES/LGPL-2.1-or-later.txt; then
+          LICENSES/GPL-2.0-only.txt LICENSES/GPL-2.0-or-later.txt LICENSES/LGPL-2.1-or-later.txt \
+          packaging/upstream.lock packaging/fetch-upstream.sh packaging/mkdist.py; then
 	blocked "the PKGBUILD pins the tarball of its own commit" \
 	        "only checkable in a clean tree whose tarball inputs are unchanged since the PKGBUILD's last commit"
 else
@@ -877,6 +879,8 @@ a1534_pcm.h
 a1534_snapshot.h
 contrib/acp/macbook91-cs4208.conf
 contrib/acp/macbook91-output-speaker.conf
+contrib/pacman/kernel-series
+contrib/pacman/macbook91-cs4208-series.hook
 contrib/wireplumber/51-macbook91-cs4208.conf
 dkms.conf
 local-changes.patch
@@ -980,8 +984,8 @@ fi
 rm -rf "$VERINDEP"
 
 # 4f. One tree, several kernel series (20261020.03). Each shipped series has to
-# be pinned in the lock, reproduce from its own upstream file, and be named in
-# dkms.conf; the 7.2 source identity must not move.
+# be pinned in the lock, reproduce from its own upstream file, and be listed in
+# kheaders/KERNEL-SERIES; the 7.2 source identity must not move.
 echo
 echo "== 4f. Kernel series =="
 if [ "$ASSEMBLED" = 0 ]; then
@@ -1009,25 +1013,42 @@ else
 	SHIPPED_SET=$(sort "$SRC/kheaders/KERNEL-SERIES" | tr '\n' ' ')
 	DIR_SET=$(for d in "$SRC"/kheaders/*/; do basename "$d"; done | sort | tr '\n' ' ')
 	LOCKSET=$(echo "$LOCK_SERIES" | sort | tr '\n' ' ')
-	DKMS_SET=$(sed -n 's/^BUILD_EXCLUSIVE_KERNEL="^(\(.*\))\\\..*"/\1/p' "$SRC/dkms.conf" \
-	           | tr '|' '\n' | sed 's/\\\././g' | sort | tr '\n' ' ')
-	if [ -n "$DKMS_SET" ] && [ "$DKMS_SET" = "$SHIPPED_SET" ] && [ "$DKMS_SET" = "$DIR_SET" ] \
-	   && [ "$DKMS_SET" = "$LOCKSET" ]; then
-		ok "dkms.conf BUILD_EXCLUSIVE_KERNEL names exactly the shipped series ($DKMS_SET)"
+	if [ -n "$SHIPPED_SET" ] && [ "$SHIPPED_SET" = "$DIR_SET" ] && [ "$SHIPPED_SET" = "$LOCKSET" ]; then
+		ok "kheaders/KERNEL-SERIES names exactly the assembled and locked series ($SHIPPED_SET)"
 	else
-		no "dkms.conf BUILD_EXCLUSIVE_KERNEL names exactly the shipped series" \
-		   "dkms '$DKMS_SET' KERNEL-SERIES '$SHIPPED_SET' kheaders '$DIR_SET' lock '$LOCKSET'"
+		no "kheaders/KERNEL-SERIES names exactly the assembled and locked series" \
+		   "KERNEL-SERIES '$SHIPPED_SET' kheaders '$DIR_SET' lock '$LOCKSET'"
 	fi
 
 	SRCID72=$(make -s -C "$SRC" BSERIES=7.2 srcid 2>/dev/null || true)
 	# The pin moves only with an edit to one of the SRCID inputs. 79b16c8b296a3821
 	# held through 20261020.03; the comment, attribution and licence-header edits
-	# after it gave 3459bbf7be37223c with identical module code (docs/PROJECT_STATE.md).
-	if [ "$SRCID72" = 3459bbf7be37223c ]; then
-		ok "the 7.2 source identity is the one recorded for this tree (3459bbf7be37223c)"
+	# after it gave 3459bbf7be37223c with identical module code, which held
+	# through 20261021.01; the A1534 fixup pin, the jack re-route and the
+	# jack-callback check gave c6661a7c92c95904 (docs/PROJECT_STATE.md).
+	if [ "$SRCID72" = c6661a7c92c95904 ]; then
+		ok "the 7.2 source identity is the one recorded for this tree (c6661a7c92c95904)"
 	else
 		no "the 7.2 source identity is the one recorded for this tree" \
-		   "got '${SRCID72:-<nothing>}', expected 3459bbf7be37223c"
+		   "got '${SRCID72:-<nothing>}', expected c6661a7c92c95904"
+	fi
+
+	# Linux 7.3 added PCI-SSID quirks for 8086:7270, which this machine shares,
+	# selecting a pin table that marks the speaker pin unconnected. Every
+	# series' derived probe must fix the A1534 path's fixup before the tables
+	# are consulted: snd_hda_pick_fixup() returns at once when fixup_id is set.
+	FIXUP_BAD=""
+	for ser in $LOCK_SERIES; do
+		awk '/codec->fixup_id = CS4208_GPIO0;/ { id = NR }
+		     /codec->fixup_list = cs4208_fixups;/ && id == NR - 1 && !pin { pin = NR }
+		     /snd_hda_pick_fixup\(codec, cs4208_models/ && !pick { pick = NR }
+		     END { exit !(pin && pick && pin < pick) }' "$SRC/$ser/cs420x.c" \
+			|| FIXUP_BAD="$FIXUP_BAD $ser"
+	done
+	if [ -z "$FIXUP_BAD" ] && [ -n "$LOCK_SERIES" ]; then
+		ok "every series fixes the A1534 fixup before the quirk tables ($(echo $LOCK_SERIES))"
+	else
+		no "every series fixes the A1534 fixup before the quirk tables" "not in:$FIXUP_BAD"
 	fi
 
 	NEWEST=$(for ser in $LOCK_SERIES; do
@@ -1040,6 +1061,76 @@ else
 		no "with no flag the fetcher picks the newest lock tag of each series" \
 		   "fetcher '$GOT_TAGS', lock '$NEWEST'"
 	fi
+fi
+
+# One list decides which kernel series get a module: kheaders/KERNEL-SERIES.
+# dkms.conf is not edited by hand: the install target writes its
+# BUILD_EXCLUSIVE_KERNEL through contrib/pacman/kernel-series, the script the
+# pacman hook and the verifier ask too. Exercise that script on a fake list
+# and a fake modules tree, and check that its regex and its own answer agree.
+KS="$SRC/contrib/pacman/kernel-series"
+if grep -qx 'BUILD_EXCLUSIVE_KERNEL="@KERNEL_SERIES_RE@"' "$SRC/dkms.conf"; then
+	ok "dkms.conf leaves BUILD_EXCLUSIVE_KERNEL to the install target"
+else
+	no "dkms.conf leaves BUILD_EXCLUSIVE_KERNEL to the install target" \
+	   "$(grep -n BUILD_EXCLUSIVE_KERNEL "$SRC/dkms.conf")"
+fi
+KSDIR=$(mktemp -d)
+printf '6.18\n7.3\n' > "$KSDIR/KERNEL-SERIES"
+for r in 6.18.55-2-cachyos-lts 7.3.0-4-cachyos 7.4.0-1-cachyos; do
+	mkdir -p "$KSDIR/modules/$r"
+	: > "$KSDIR/modules/$r/vmlinuz"
+done
+# A modules directory without a kernel image (left behind by a removed kernel).
+mkdir -p "$KSDIR/modules/7.1.9-1-leftover"
+ks() { bash "$KS" --series-file "$KSDIR/KERNEL-SERIES" "$@"; }
+KS_RE=$(ks --dkms-regex)
+if [ "$KS_RE" = '^(6\.18|7\.3)\.' ] && [ "$(ks --list)" = '6.18 7.3' ]; then
+	ok "kernel-series turns the list into the dkms.conf regex ($KS_RE)"
+else
+	no "kernel-series turns the list into the dkms.conf regex" "got '$KS_RE' and '$(ks --list)'"
+fi
+KS_DISAGREE=""
+for r in 6.18.55-2-cachyos-lts 7.3.0-4-cachyos 7.3.0-rc6-2-cachyos-rc 7.4.0-1-cachyos \
+         7.30.1-1 6.180.1 7.3-rc1 17.3.1; do
+	if grep -qE "$KS_RE" <<<"$r"; then a=y; else a=n; fi
+	if ks --kernel "$r" >/dev/null; then b=y; else b=n; fi
+	[ "$a" = "$b" ] || KS_DISAGREE="$KS_DISAGREE $r(regex $a, script $b)"
+done
+if [ -z "$KS_DISAGREE" ] && ks --kernel 7.3.0-4-cachyos >/dev/null \
+   && ! ks --kernel 7.4.0-1-cachyos >/dev/null; then
+	ok "DKMS and kernel-series agree on which kernels are supported"
+else
+	no "DKMS and kernel-series agree on which kernels are supported" "disagree:$KS_DISAGREE"
+fi
+KS_HOOK=$(ks --hook --modules-root "$KSDIR/modules")
+KS_HOOK_RC=$?
+if [ "$KS_HOOK_RC" = 0 ] && [ "$(grep -c '==> WARNING' <<<"$KS_HOOK")" = 1 ] \
+   && contains_str "$KS_HOOK" 'kernel 7.4.0-1-cachyos (Linux 7.4) is not a kernel series' \
+   && contains_str "$KS_HOOK" 'Boot the LTS kernel'; then
+	ok "the pacman hook warns once per installed kernel of another series, and does not fail"
+else
+	no "the pacman hook warns once per installed kernel of another series, and does not fail" \
+	   "rc $KS_HOOK_RC: $(head -3 <<<"$KS_HOOK")"
+fi
+bash "$KS" --list --series-file "$KSDIR/missing" >/dev/null 2>&1
+KS_MISSING_RC=$?
+if [ "$KS_MISSING_RC" = 2 ]; then
+	ok "kernel-series fails with exit 2 when it cannot read the list"
+else
+	no "kernel-series fails with exit 2 when it cannot read the list" \
+	   "exit $KS_MISSING_RC; a missing list must not read as an answer"
+fi
+rm -rf "$KSDIR"
+KS_HOOKFILE="$SRC/contrib/pacman/macbook91-cs4208-series.hook"
+if grep -qx 'When = PostTransaction' "$KS_HOOKFILE" \
+   && grep -qx 'Target = usr/lib/modules/\*/vmlinuz' "$KS_HOOKFILE" \
+   && grep -qx 'Exec = /usr/lib/macbook91-cs4208/kernel-series --hook' "$KS_HOOKFILE" \
+   && ! grep -q 'AbortOnFail' "$KS_HOOKFILE"; then
+	ok "the series hook runs after the transaction, on kernel installs, and cannot abort it"
+else
+	no "the series hook runs after the transaction, on kernel installs, and cannot abort it" \
+	   "$KS_HOOKFILE"
 fi
 
 # The package requires no named kernel; this is what keeps it that way. No
@@ -1186,14 +1277,14 @@ elif [ -r "$KDIR/.config" ]; then
 	# against a series this tree does not ship could silently mismatch
 	# internal structs - the hazard this project rejected as audit finding
 	# F13 - so a kernel outside kheaders/KERNEL-SERIES must be refused. 9.9
-	# stands for "some future series"; 6.18 and 7.2 are shipped.
+	# stands for "some future series".
 	FAKE=$(mktemp -d)
 	mkdir -p "$FAKE/include/generated"
 	printf '#define UTS_RELEASE "9.9.1-1-nonesuch"\n' > "$FAKE/include/generated/utsrelease.h"
 	# Copy the compiler family of the real kernel, clang or gcc: a fake .config
 	# that declares neither makes `check` fail for that reason, so on a
-	# gcc-built kernel (the 6.18 LTS) the override case would fail for the
-	# wrong reason and the refusal case would pass for it.
+	# gcc-built kernel (the LTS) the refusal case would pass for the wrong
+	# reason.
 	grep -E '^CONFIG_CC_IS_(CLANG|GCC)=y' "$KDIR/.config" > "$FAKE/.config"
 	touch "$FAKE/Module.symvers"
 	if make -C "$SRC" KDIR="$FAKE" check >/dev/null 2>&1; then
@@ -1201,10 +1292,15 @@ elif [ -r "$KDIR/.config" ]; then
 	else
 		ok "build refuses a mismatched kernel series"
 	fi
-	if make -C "$SRC" KDIR="$FAKE" A1534_ALLOW_SERIES_MISMATCH=1 check >/dev/null 2>&1; then
-		ok "series mismatch can be overridden explicitly"
+	# There is no way round the refusal: a kernel of another series gets no
+	# module, never the newest shipped series built against its headers. The
+	# variable that used to allow that must have no effect and no mention.
+	if make -C "$SRC" KDIR="$FAKE" A1534_ALLOW_SERIES_MISMATCH=1 check >/dev/null 2>&1 \
+	   || grep -q 'ALLOW_SERIES_MISMATCH' "$SRC/Makefile"; then
+		no "the series refusal has no override" \
+		   "A1534_ALLOW_SERIES_MISMATCH=1 still builds, or is still named in the Makefile"
 	else
-		no "series mismatch can be overridden explicitly" "override had no effect"
+		ok "the series refusal has no override"
 	fi
 	rm -rf "$FAKE"
 
@@ -1293,6 +1389,18 @@ else
 	fi
 fi
 
+# The LTS headers are the package's one kernel dependency; kernels of other
+# distributions and the clang toolchain are not named at all (the headers of
+# the clang-built CachyOS kernel depend on clang, lld and llvm themselves).
+if grep -q "^depends=(.*'linux-cachyos-lts-headers'" "$ARCHPKG/PKGBUILD" \
+   && ! grep -qE "'(linux-headers|linux-lts-headers|clang|lld|llvm)[:']" "$ARCHPKG/PKGBUILD" \
+   && ! grep -q '_toolchain_note' "$ARCHPKG/macbook91-cs4208.install"; then
+	ok "the package depends on the LTS headers and names no kernel it does not support"
+else
+	no "the package depends on the LTS headers and names no kernel it does not support" \
+	   "$(grep -nE '^(depends|optdepends)=' "$ARCHPKG/PKGBUILD")"
+fi
+
 if command -v makepkg >/dev/null; then
 	t ".SRCINFO is current" bash -c \
 	  "cd '$ARCHPKG' && diff -q <(makepkg --printsrcinfo) .SRCINFO"
@@ -1339,6 +1447,28 @@ if [ -n "$P" ]; then
 		else
 			no "DKMS module identity did not follow the package rename" \
 			   "dkms.conf must keep PACKAGE_NAME=macbook91-cs4208; changing it orphans every installed module"
+		fi
+		# What DKMS builds for is written at install time from the package's
+		# own series list, by the script the hook and the verifier use.
+		KS_PKG_LIST=$(tar -xaOf "$P" "${DKMS_PATH%dkms.conf}kheaders/KERNEL-SERIES" 2>/dev/null)
+		KS_PKG_RE=$(sed -n 's/^BUILD_EXCLUSIVE_KERNEL="\(.*\)"$/\1/p' <<<"$DKMS_CONF")
+		KS_WANT_RE=$(bash "$SRC/contrib/pacman/kernel-series" --dkms-regex \
+		             --series-file <(printf '%s\n' "$KS_PKG_LIST") 2>/dev/null)
+		if [ -n "$KS_PKG_LIST" ] && [ -n "$KS_PKG_RE" ] && [ "$KS_PKG_RE" = "$KS_WANT_RE" ]; then
+			ok "packaged dkms.conf builds exactly the packaged series ($KS_PKG_RE)"
+		else
+			no "packaged dkms.conf builds exactly the packaged series" \
+			   "dkms.conf '$KS_PKG_RE', from KERNEL-SERIES '$KS_WANT_RE'"
+		fi
+		PKG_FILES=$(tar -tvaf "$P")
+		KS_PKG_FILE=$(sed -n 's/^SERIES_FILE=//p' <<<"$(tar -xaOf "$P" usr/lib/macbook91-cs4208/kernel-series 2>/dev/null)")
+		if [ -n "$KS_PKG_FILE" ] && [ "/$DKMS_PATH" = "${KS_PKG_FILE%kheaders/KERNEL-SERIES}dkms.conf" ] \
+		   && grep -qE '^-rwxr-xr-x .* usr/lib/macbook91-cs4208/kernel-series$' <<<"$PKG_FILES" \
+		   && grep -qE ' usr/share/libalpm/hooks/71-macbook91-cs4208-series\.hook$' <<<"$PKG_FILES"; then
+			ok "packaged hook and kernel-series read the packaged series list ($KS_PKG_FILE)"
+		else
+			no "packaged hook and kernel-series read the packaged series list" \
+			   "SERIES_FILE '$KS_PKG_FILE', dkms.conf at '/$DKMS_PATH'"
 		fi
 	fi
 
@@ -1463,6 +1593,22 @@ if [ -f "$ACPSET" ] && grep -qE '^channel-map = front-left,front-right,rear-left
 else
 	no "profile set's analog mapping is four-channel" \
 	   "the internal PCM accepts only S16_LE/44100/4ch; any other mapping yields a sink that fails on first use"
+fi
+
+# A kernel the package does not support runs the stock codec, whose PCM opens
+# in stereo; the four-channel mapping fails there and, without a stereo
+# output, the card offered only a microphone. analog-stereo is therefore an
+# output too, ranked below analog-surround-40.
+ACP_STEREO=$(awk '/^\[Mapping analog-stereo\]/{f=1;next} /^\[/{f=0} f' "$ACPSET" 2>/dev/null)
+ACP_S40_PRIO=$(awk '/^\[Mapping analog-surround-40\]/{f=1;next} /^\[/{f=0} f && /^priority = /{print $3}' "$ACPSET" 2>/dev/null)
+ACP_ST_PRIO=$(sed -n 's/^priority = //p' <<<"$ACP_STEREO")
+if contains_str "$ACP_STEREO" '^paths-output = .*analog-output-headphones' \
+   && ! contains_str "$ACP_STEREO" '^direction = ' \
+   && [ -n "$ACP_ST_PRIO" ] && [ -n "$ACP_S40_PRIO" ] && [ "$ACP_ST_PRIO" -lt "$ACP_S40_PRIO" ]; then
+	ok "the stereo mapping is an output for the stock codec, ranked below the four-channel one"
+else
+	no "the stereo mapping is an output for the stock codec, ranked below the four-channel one" \
+	   "analog-stereo priority '${ACP_ST_PRIO}', analog-surround-40 '${ACP_S40_PRIO}'"
 fi
 
 # The shipped path ends in an .include of a file owned by alsa-card-profiles.
@@ -1688,14 +1834,45 @@ else
 	STOCK_CODEC_TEST_RAN=1
 	# The diagnostic archive now lands in its own mktemp -d directory rather
 	# than a predictable TMPDIR path (F-08); confine this test run's TMPDIR
-	# so the archive it produces can be cleaned up afterward.
+	# so the archive it produces can be cleaned up afterward, and its
+	# XDG_STATE_HOME, where the verifier keeps that archive, so the run adds
+	# nothing to the user's own state directory.
 	VERIFY_TMPDIR=$(mktemp -d)
-	if TMPDIR="$VERIFY_TMPDIR" "$TOOLS/macbook91-audio-verify" --no-sound </dev/null >/dev/null 2>&1; then
+	if TMPDIR="$VERIFY_TMPDIR" XDG_STATE_HOME="$VERIFY_TMPDIR/state" \
+	   "$TOOLS/macbook91-audio-verify" --no-sound </dev/null >/dev/null 2>&1; then
 		no "verifier fails on the stock codec" "it returned success with the stock module loaded"
 	else
 		ok "verifier fails on the stock codec"
 	fi
 	rm -rf "$VERIFY_TMPDIR"
+fi
+
+# The running kernel's series is the pacman hook's own question, asked
+# through the same script, never a second list.
+if grep -q '^KERNEL_SERIES=/usr/lib/\$PKG/kernel-series$' "$TOOLS/macbook91-audio-verify" \
+   && grep -qF '"$KERNEL_SERIES" --kernel "$KVER"' "$TOOLS/macbook91-audio-verify" \
+   && ! grep -q 'emit PASS "running kernel"' "$TOOLS/macbook91-audio-verify"; then
+	ok "the verifier FAILs a kernel series the package does not support, through kernel-series"
+else
+	no "the verifier FAILs a kernel series the package does not support, through kernel-series" \
+	   "tools/macbook91-audio-verify must ask /usr/lib/macbook91-cs4208/kernel-series --kernel"
+fi
+
+# A mainline pin table on the A1534 path is a FAIL of its own, read from the
+# codec's driver_pin_configs; and the archive keeps only this card's block of
+# `pactl list cards`, which otherwise names every Bluetooth device address.
+if grep -q 'driver_pin_configs' "$TOOLS/macbook91-audio-verify" \
+   && grep -q 'emit FAIL "no mainline pin overrides"' "$TOOLS/macbook91-audio-verify"; then
+	ok "the verifier FAILs a mainline pin override on the A1534 path"
+else
+	no "the verifier FAILs a mainline pin override on the A1534 path" "check missing"
+fi
+if ! grep -qE 'pactl list cards +>' "$TOOLS/macbook91-audio-verify" \
+   && grep -qF 'index($0, c)' "$TOOLS/macbook91-audio-verify" \
+   && grep -qF 'alsa.card = ' "$TOOLS/macbook91-audio-verify"; then
+	ok "the diagnostic archive keeps only this card's pactl block"
+else
+	no "the diagnostic archive keeps only this card's pactl block" "31-cards.txt is unfiltered"
 fi
 
 # It must refuse to play a tone when software gates have already failed.
@@ -1968,8 +2145,11 @@ else
 	   "this is the exact inference that had to be withdrawn"
 fi
 
-# selfcheck must run clean, unprivileged, touching nothing.
-if out=$("$RUNNER" selfcheck 2>&1); then
+# selfcheck must run clean, unprivileged, touching nothing. Like every runner
+# command it writes a run directory, so it gets a scratch home: the suite
+# must not add a run to the user's own state directory each time it runs.
+RUNNER_HOME=$(mktemp -d)
+if out=$(MACBOOK91_STATE_DIR="$RUNNER_HOME" "$RUNNER" selfcheck 2>&1); then
 	if contains_str "$out" "verdict: PASS"; then
 		ok "macbook91-runner selfcheck passes unprivileged"
 	else
@@ -1978,6 +2158,7 @@ if out=$("$RUNNER" selfcheck 2>&1); then
 else
 	no "macbook91-runner selfcheck passes unprivileged" "$(printf '%s' "$out" | tail -5)"
 fi
+rm -rf "$RUNNER_HOME"
 
 # The Apple audit must keep its offsets: a claim without one is not checkable.
 for off in 0x9c2dda 0x9c328c 0x9c2f1e 0xa2e1b4 0xa48c42 0x9f61ba 0x9f6314; do
@@ -2741,10 +2922,11 @@ echo "== 9. Nothing personal in the repository =="
 # name, their mail address, an absolute path through their home directory, or
 # machine-identifying data. Upstream kernel authors' addresses stay: they are
 # GPL attribution, not personal data of this machine's owner.
-priv_scan() {  # priv_scan NAME PATTERN [EXCLUDE_PATTERN]
-	local name=$1 pat=$2 excl=${3:-}
+priv_scan() {  # priv_scan NAME PATTERN [EXCLUDE_PATTERN [case]]
+	local name=$1 pat=$2 excl=${3:-} flags=-nIiE
+	[ "${4:-}" = case ] && flags=-nIE
 	local hits
-	hits=$(git -C "$ROOT" ls-files -z -- . ':!private' | xargs -0 grep -nIiE -- "$pat" 2>/dev/null || true)
+	hits=$(git -C "$ROOT" ls-files -z -- . ':!private' | xargs -0 grep "$flags" -- "$pat" 2>/dev/null || true)
 	[ -n "$excl" ] && hits=$(printf '%s' "$hits" | grep -viE -- "$excl" || true)
 	if [ -z "$hits" ]; then
 		ok "no $name in tracked files"
@@ -2761,7 +2943,10 @@ priv_scan "absolute home paths"      '/home/[a-z0-9_-]+'
 priv_scan "MAC addresses"            '\b([0-9a-f]{2}:){5}[0-9a-f]{2}\b'
 priv_scan "private IPv4 addresses"   '\b(192\.168|10\.[0-9]|172\.(1[6-9]|2[0-9]|3[01]))\.[0-9]+\.[0-9]+'
 priv_scan "disk or LUKS UUIDs"       '\b[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\b'
-priv_scan "Apple hardware serials"   '\b(C0[0-9]|FVF|DLX|F5K)[A-Z0-9]{8,}\b'
+# Serials are upper case, and this one scan is case-sensitive: matched
+# without case it also finds lower-case hex digests, such as a sha256 in
+# packaging/upstream.lock that starts with c0 and a digit.
+priv_scan "Apple hardware serials"   '\b(C0[0-9]|FVF|DLX|F5K)[A-Z0-9]{8,}\b' '' case
 
 # Mail addresses: only upstream kernel authors are allowed.
 MAILS=$(git -C "$ROOT" ls-files -z -- . ':!private' \

@@ -3,7 +3,7 @@
 Base: `upstream/cs420x.c`, verbatim from `sound/hda/codecs/cirrus/cs420x.c` at
 the tag of each series recorded in `packaging/upstream.lock` (the same patch applies to each series' `upstream/<series>/cs420x.c`, yielding `<series>/cs420x.c`) - a resolved tag, not a fixed
 one, and a file that is fetched at build time rather than stored here. See
-`UPSTREAM.txt`. The complete delta is `local-changes.patch` (270 added, 3
+`UPSTREAM.txt`. The complete delta is `local-changes.patch` (290 added, 3
 removed lines) and every hunk is bracketed by
 `/* --- MacBook9,1 (A1534) additions: begin/end --- */`. Those counts are
 recomputed from the patch by `tests/run-tests.sh`, because they were
@@ -16,14 +16,15 @@ hand-maintained until they read 51 and 2.
 | 3 | `unsigned int is_a1534:1;`, `struct a1534_state a1534;` and `struct a1534_snapshot a1534_snap;` in `struct cs_spec` | per-codec flag and state, so A1534 behaviour can never leak to another codec |
 | 4 | `a1534_streq()` + `cs4208_is_a1534()` | the gate; the decision itself lives in `a1534_match.h` so the host tests exercise the same code |
 | 5 | set `spec->is_a1534` early in `cs4208_probe()` and log on match | one machine-checkable marker, per the project's audio plan |
-| 6 | gated call of `setup_a1534()` + `play_a1534()`, **return values checked** | amplifier bring-up; on failure `is_a1534` is cleared so the codec falls back to plain mainline behaviour instead of pretending to have succeeded (audit F6) Both vendored functions currently return 0 on every path, so this fallback is defensive and has never triggered. |
+| 6 | gated call of `setup_a1534()` + `play_a1534()`, **return values checked** | amplifier bring-up; on failure `is_a1534` is cleared so the codec falls back to plain mainline behaviour instead of pretending to have succeeded (audit F6). Both vendored functions currently return 0 on every path, so this fallback is defensive and has never triggered. |
 | 7 | `#include "vendored/a1534_sequence.h"`, `"a1534_i2c.h"`, `"a1534_snapshot.h"` and `"a1534_pcm.h"` | the bring-up trace (vendored evidence), the amplifier I2C transport, the firmware-state snapshot and the new PCM layer |
 | 8 | `cs_build_pcms()`, `cs_init_dispatch()`, `cs_resume()` dispatchers, `cs_suspend()`; `cs_codec_ops` points at them | **the F2 fix**: A1534 behaviour is selected per codec inside one `const` ops table, instead of assigning `hda_codec_to_driver(codec)->ops`, which is module-global. `cs_resume()` reproduces the core's own default (`snd_hda_codec_init()` + `snd_hda_regmap_sync()`) for non-A1534 codecs. `cs_suspend()` clears `bringup_valid`, so a resume replays the bring-up because a suspend happened, not because of a power-state event. |
 | 9 | `struct a1534_state` and `struct a1534_snapshot`, with `A1534_NCOEF` and `A1534_PIN_FIRST`/`A1534_PIN_LAST`/`A1534_NPIN`, defined before `struct cs_spec` | `cs_spec` embeds both; the state is per codec and guarded by its own mutex |
 | 10 | `cs4208_probe()` logs `CS4208: not the A1534 path (codec SSID ..., DMI ...)` when the gate does not match | a negative marker, so a log without the A1534 line still says why |
 | 11 | on a match, `cs4208_probe()` initialises the mutex, sets `hp = -1` (jack state unknown), takes and logs the firmware-state snapshot only while pin `0x1d` still holds its firmware configuration, and sets `bringup_valid` after a successful bring-up | a snapshot taken from an already-reset codec would let the resume path restore nothing |
 | 12 | after `snd_hda_pick_fixup()`/`snd_hda_apply_fixup()`, `gpio_mask`, `gpio_dir` and `gpio_data` are set to the A1534 values | the mainline GPIO fixup would narrow the mask and switch the amplifier supply GPIOs off; going through the spec fields lets `snd_hda_codec_set_gpio()` replay them on resume |
-| 13 | `MODULE_VERSION(A1534_SRCID)` | the loaded module's identity, read by the verifier from `/sys/module/snd_hda_codec_cs420x/version`. `A1534_SRCID` is the package version plus a hash of `cs420x.c`, `a1534_pcm.h`, `a1534_match.h`, `a1534_snapshot.h`, `a1534_i2c.h` and `vendored/a1534_sequence.h` (`Makefile`). The patch's own comment names only three of them; it is left as is, because changing the patch changes the derived `cs420x.c` hash in `packaging/upstream.lock`. |
+| 13 | `MODULE_VERSION(A1534_SRCID)` | the loaded module's identity, read by the verifier from `/sys/module/snd_hda_codec_cs420x/version`. `A1534_SRCID` is the package version plus a hash of `cs420x.c`, `a1534_pcm.h`, `a1534_match.h`, `a1534_snapshot.h`, `a1534_i2c.h` and `vendored/a1534_sequence.h` (`Makefile`, `SRCIDFILES`); the patch's own comment names the same files. |
+| 14 | on a match, `cs4208_probe()` sets `codec->fixup_id = CS4208_GPIO0` and `codec->fixup_list = cs4208_fixups` before `snd_hda_pick_fixup()` | the fixup this machine got from the quirk tables on every series up to 7.2 (`docs/ROOT-CAUSE.md`), which the GPIO reconciliation of row 12 is written against. Linux 7.3 added PCI-SSID quirks for 8086:7270 ("MacBookAir 7,2"), which this machine shares; they select `CS4208_MBA6`, whose pin table marks speaker pin `0x1d` unconnected. `snd_hda_pick_fixup()` returns at once when `fixup_id` is set, so the tables are not consulted on this machine |
 
 ## What was deliberately NOT carried over from the bundled snapshot
 

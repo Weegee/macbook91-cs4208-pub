@@ -41,8 +41,6 @@ KSERIES := $(shell sed -n 's/.*UTS_RELEASE "\([0-9]*\.[0-9]*\).*/\1/p' \
 SHIPPED := $(shell cat $(PWD)/kheaders/KERNEL-SERIES 2>/dev/null)
 ifneq ($(filter $(KSERIES),$(SHIPPED)),)
   BSERIES := $(KSERIES)
-else ifeq ($(A1534_ALLOW_SERIES_MISMATCH),1)
-  BSERIES := $(lastword $(SHIPPED))
 endif
 
 obj-m += $(MODNAME).o
@@ -101,9 +99,7 @@ check:
 	    echo "       To add the series, in the repository: record a tag of it with"; \
 	    echo "       packaging/fetch-upstream.sh --tag vX.Y.Z --accept-new, commit"; \
 	    echo "       packaging/upstream.lock, then make arch-pkg-dev."; \
-	    echo "       Or set A1534_ALLOW_SERIES_MISMATCH=1 to build the newest shipped series"; \
-	    echo "       against this kernel if you have checked the headers yourself."; \
-	    [ "$(A1534_ALLOW_SERIES_MISMATCH)" = "1" ] || exit 1 ;; \
+	    exit 1 ;; \
 	 esac
 	@test -n "$(BSERIES)" -a -r "$(PWD)/$(BSERIES)/cs420x.c" \
 	  -a -r "$(PWD)/upstream/$(BSERIES)/cs420x.c" -a -r "$(PWD)/kheaders/$(BSERIES)/hda_local.h" || \

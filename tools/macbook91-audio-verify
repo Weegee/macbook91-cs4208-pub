@@ -5,7 +5,7 @@
 #
 # Runs the software gates first and only asks the user anything once the
 # software evidence says a question is worth asking. Returns a single
-# PASS/FAIL. On failure it writes exactly one redacted diagnostic archive.
+# PASS/FAIL. On failure it writes exactly one diagnostic archive.
 #
 # It never records audio to the archive, never changes mixer levels
 # permanently, never alters PipeWire/WirePlumber policy, and never touches the
@@ -46,6 +46,9 @@ HP_TONE_AMP=0.03
 # because the driver - not the session manager - switches converters.
 ANALOG_PROFILE=analog-surround-40
 WP_DROPIN=/usr/share/wireplumber/wireplumber.conf.d/51-$PKG.conf
+# The package's one answer to "is this kernel series supported", shared
+# with its pacman hook and with dkms.conf.
+KERNEL_SERIES=/usr/lib/$PKG/kernel-series
 
 # A private, unpredictable scratch directory for anything this run writes
 # temporarily (the microphone recording, the diagnostic archive staging area).
@@ -280,8 +283,16 @@ else
 	emit FAIL "DMI identity" "got '$DMI_VENDOR / $DMI_PRODUCT', want 'Apple Inc. / $DMI_PRODUCT_WANT'"
 fi
 
+# A kernel of a series this package does not support runs the stock codec;
+# every later check would only say so less clearly.
 KVER=$(uname -r)
-emit PASS "running kernel" "$KVER"
+if [ ! -x "$KERNEL_SERIES" ]; then
+	emit FAIL "kernel series supported" "$KERNEL_SERIES is missing - reinstall $PACMAN_PKG"
+elif SERIES_MSG=$("$KERNEL_SERIES" --kernel "$KVER" 2>&1); then
+	emit PASS "kernel series supported" "$SERIES_MSG"
+else
+	emit FAIL "kernel series supported" "$(tr '\n' ' ' <<<"$SERIES_MSG")"
+fi
 
 # --- 2. codec ---------------------------------------------------------------
 
@@ -391,6 +402,27 @@ if [ -n "$CODEC_FILE" ]; then
 		     "pin $SPEAKER_PIN reads the firmware value $PIN1D_CFG - the firmware state was not restored on this resume. a1534_restore=1 (the default) is the mechanism meant to restore it; check the kernel log for the 'A1534: pin 0x1d after restore' line."
 	elif [ -n "$PIN1D_CFG" ]; then
 		emit PASS "speaker configuration present" "pin $SPEAKER_PIN cfg $PIN1D_CFG"
+	fi
+
+	# The A1534 path programs this machine's pins itself, by raw verbs. A pin
+	# table from a mainline quirk entry would mark the speaker pin unconnected
+	# (Linux 7.3 added such an entry for this PCI subsystem id, "MacBookAir
+	# 7,2"; the driver fixes its fixup so the entry is never consulted). The
+	# codec's hwdep node lists every pin override a fixup applied: on this
+	# path, none.
+	CODEC_CARD=${CODEC_FILE#/proc/asound/card}
+	CODEC_CARD=${CODEC_CARD%%/*}
+	PINOVR_FILE=/sys/class/sound/hwC${CODEC_CARD}D${CODEC_FILE##*#}/driver_pin_configs
+	if [ -r "$PINOVR_FILE" ]; then
+		PINOVR=$(cat "$PINOVR_FILE" 2>/dev/null)
+		if [ -z "$PINOVR" ]; then
+			emit PASS "no mainline pin overrides" "$PINOVR_FILE is empty"
+		else
+			emit FAIL "no mainline pin overrides" \
+			     "$(tr '\n' ' ' <<<"$PINOVR")- a mainline fixup rewrote pins the A1534 path owns; the speaker pin may read as unconnected"
+		fi
+	else
+		emit SKIPPED "no mainline pin overrides" "$PINOVR_FILE is not readable (no CONFIG_SND_HDA_RECONFIG)"
 	fi
 
 	# Output routing, which is a function of the jack. The driver switches
@@ -849,7 +881,10 @@ have wpctl && wpctl status        > "$OUT/30-wpctl.txt" 2>&1
 # Profile and port availability, and the two files that decide them. This is
 # the direct evidence for the class of failure where the card is healthy and
 # the session manager has still left it without a sink.
-have pactl && pactl list cards    > "$OUT/31-cards.txt" 2>&1
+# This card's block only: the full list carries every other card too,
+# Bluetooth headsets with their device addresses among them.
+have pactl && pactl list cards 2>&1 \
+	| awk -v c="alsa.card = \"$CARD\"" -v RS= -v ORS='\n\n' 'index($0, c)' > "$OUT/31-cards.txt"
 cp "$WP_DROPIN" "$OUT/32-wireplumber-dropin.conf" 2>/dev/null
 cp -r "/usr/share/$PKG/acp" "$OUT/33-acp" 2>/dev/null
 cat /sys/power/mem_sleep          > "$OUT/40-suspend.txt" 2>/dev/null
@@ -876,7 +911,8 @@ if tar -C "$(dirname "$OUT")" -caf "$ARCHIVE" "$(basename "$OUT")" 2>/dev/null; 
 	fi
 	rmdir "$ARCHIVE_STAGE" 2>/dev/null || true   # empty once the archive moved to $KEEP
 	printf '        %s\n\n' "$ARCHIVE"
-	printf '        It contains no audio recording and no credentials.\n\n'
+	printf '        It contains no audio recording and no credentials. 30-wpctl.txt\n'
+	printf '        names every audio device PipeWire knows; read it before you share it.\n\n'
 else
 	printf '  could not create the archive; the collected diagnostics are in:\n'
 	printf '        %s\n\n' "$OUT"

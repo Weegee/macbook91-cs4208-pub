@@ -1,0 +1,116 @@
+#!/usr/bin/env bash
+# SPDX-License-Identifier: GPL-3.0-or-later
+#
+# kernel-series - which Linux kernel series the macbook91-cs4208 driver is
+# built for, and what to do on any other.
+#
+# One list decides it: kheaders/KERNEL-SERIES in the DKMS source tree, which
+# packaging/fetch-upstream.sh writes from packaging/upstream.lock. Outside the
+# module's own Makefile this script is its only reader. The root Makefile's
+# install target writes dkms.conf's BUILD_EXCLUSIVE_KERNEL from --dkms-regex,
+# the pacman hook calls --hook and macbook91-audio-verify calls --kernel, so
+# what DKMS builds, what the hook warns about and what the verifier fails on
+# cannot disagree.
+#
+# A kernel belongs to series X.Y when its release starts with "X.Y.", which is
+# exactly what BUILD_EXCLUSIVE_KERNEL="^(X\.Y|...)\." tests.
+#
+#   kernel-series --list              the shipped series, space-separated
+#   kernel-series --kernel RELEASE    exit 0 if RELEASE is of a shipped series,
+#                                     1 if not; a sentence on stdout either way
+#   kernel-series --hook              a WARNING block for every installed kernel
+#                                     of another series (the pacman hook)
+#   kernel-series --dkms-regex        the BUILD_EXCLUSIVE_KERNEL value
+#
+#   --series-file FILE   the list to read (default: the installed source tree)
+#   --modules-root DIR   where --hook looks for kernels (default /usr/lib/modules)
+#
+# Exit 2: bad arguments, or no readable list.
+set -u
+
+SERIES_FILE=/usr/src/macbook91-cs4208-@PKGVER@/kheaders/KERNEL-SERIES
+MODULES_ROOT=/usr/lib/modules
+MODE=''
+REL=''
+
+die() { printf 'kernel-series: %s\n' "$*" >&2; exit 2; }
+
+while [ $# -gt 0 ]; do
+	case "$1" in
+		--list|--hook|--dkms-regex) MODE=${1#--}; shift ;;
+		--kernel)
+			[ $# -ge 2 ] || die "--kernel needs a kernel release"
+			MODE=kernel; REL=$2; shift 2 ;;
+		--series-file)
+			[ $# -ge 2 ] || die "--series-file needs a file"
+			SERIES_FILE=$2; shift 2 ;;
+		--modules-root)
+			[ $# -ge 2 ] || die "--modules-root needs a directory"
+			MODULES_ROOT=$2; shift 2 ;;
+		*) die "unknown argument: $1" ;;
+	esac
+done
+[ -n "$MODE" ] || die "no mode: use --list, --kernel RELEASE, --hook or --dkms-regex"
+
+[ -r "$SERIES_FILE" ] || die "cannot read the list of shipped series, $SERIES_FILE"
+SERIES=()
+while read -r s; do
+	[ -n "$s" ] || continue
+	[[ $s =~ ^[0-9]+\.[0-9]+$ ]] || die "malformed series '$s' in $SERIES_FILE"
+	SERIES+=("$s")
+done < "$SERIES_FILE"
+[ "${#SERIES[@]}" -gt 0 ] || die "$SERIES_FILE lists no series"
+
+shipped() {  # RELEASE -> exit 0 when it belongs to a shipped series
+	local s
+	for s in "${SERIES[@]}"; do
+		case "$1" in "$s".*) return 0 ;; esac
+	done
+	return 1
+}
+
+series_of() {  # RELEASE -> its X.Y, or nothing
+	[[ $1 =~ ^([0-9]+\.[0-9]+)\. ]] && printf '%s' "${BASH_REMATCH[1]}"
+}
+
+unsupported() {  # RELEASE -> the explanation, the same for hook and verifier
+	local ks
+	ks=$(series_of "$1")
+	printf 'kernel %s (Linux %s) is not a kernel series macbook91-cs4208 supports.\n' \
+		"$1" "${ks:-of unknown series}"
+	printf 'No speaker driver is built for it: it runs the stock codec driver, so the\n'
+	printf 'internal speakers stay silent there. Supported series: %s.\n' "${SERIES[*]}"
+	printf 'Boot the LTS kernel (linux-cachyos-lts) for audio, and update\n'
+	printf 'macbook91-cs4208-dkms once it supports Linux %s.\n' "${ks:-this series}"
+}
+
+case "$MODE" in
+	list)
+		printf '%s\n' "${SERIES[*]}"
+		;;
+	dkms-regex)
+		re=''
+		for s in "${SERIES[@]}"; do re+="${re:+|}${s//./\\.}"; done
+		printf '^(%s)\\.\n' "$re"
+		;;
+	kernel)
+		if shipped "$REL"; then
+			printf 'kernel %s is of Linux %s, a supported series (%s)\n' \
+				"$REL" "$(series_of "$REL")" "${SERIES[*]}"
+			exit 0
+		fi
+		unsupported "$REL"
+		exit 1
+		;;
+	hook)
+		for d in "$MODULES_ROOT"/*/; do
+			[ -e "$d/vmlinuz" ] || continue
+			rel=$(basename "$d")
+			shipped "$rel" && continue
+			printf '\n==> WARNING: macbook91-cs4208 ==================================\n'
+			unsupported "$rel" | sed 's/^/    /'
+			printf '==================================================================\n\n'
+		done
+		;;
+esac
+exit 0

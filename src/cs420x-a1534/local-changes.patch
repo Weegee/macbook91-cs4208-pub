@@ -133,7 +133,7 @@
  static int cs4208_probe(struct hda_codec *codec)
  {
  	struct cs_spec *spec = codec->spec;
-@@ -711,10 +814,96 @@
+@@ -711,10 +814,115 @@
  	/* exclude NID 0x10 (HP) from output volumes due to different steps */
  	spec->gen.out_vol_mask = 1ULL << 0x10;
  
@@ -177,9 +177,11 @@
 +				   "A1534: firmware state already lost at probe; no snapshot taken\n");
 +		}
 +
-+		/* Unlike the bundled snapshot, these returns are checked. A
-+		 * failed bring-up falls back to plain mainline behaviour
-+		 * rather than pretending to have succeeded. */
++		/* Unlike the bundled snapshot, these returns are checked, so
++		 * a bring-up that reports an error falls back to plain
++		 * mainline behaviour. The vendored sequence reports none
++		 * today: its read checks only log (codec_dbg), and
++		 * setup_a1534() and play_a1534() return 0 unconditionally. */
 +		err = setup_a1534(codec);
 +		if (err < 0) {
 +			codec_warn(codec, "A1534: bring-up failed (%d), using generic path\n", err);
@@ -194,6 +196,23 @@
 +			}
 +		}
 +
++		/*
++		 * Fix this machine's mainline fixup to CS4208_GPIO0 on every
++		 * kernel series instead of leaving it to the quirk tables.
++		 * Until 7.2 the tables reached it on their own (the Apple
++		 * vendor entry matches the codec SSID, and CS4208_MAC_AUTO
++		 * finds no MacBook9,1 entry and falls back to CS4208_GPIO0,
++		 * docs/ROOT-CAUSE.md), and the GPIO reconciliation below is
++		 * written against it. Linux 7.3 added PCI-SSID entries for
++		 * 8086:7270 ("MacBookAir 7,2") to both tables, and this
++		 * machine carries that PCI SSID too; they select CS4208_MBA6,
++		 * whose pin table marks the speaker pin 0x1d unconnected.
++		 * snd_hda_pick_fixup() returns at once when fixup_id is set.
++		 */
++		if (spec->is_a1534) {
++			codec->fixup_id = CS4208_GPIO0;
++			codec->fixup_list = cs4208_fixups;
++		}
 +	}
 +	/* --- MacBook9,1 (A1534) additions: end --- */
 +
@@ -230,7 +249,7 @@
  	snd_hda_override_wcaps(codec, 0x18,
  			       get_wcaps(codec, 0x18) | AC_WCAP_STEREO);
  	cs4208_fix_amp_caps(codec, 0x18);
-@@ -750,14 +939,80 @@
+@@ -750,14 +958,80 @@
  	return err;
  }
  
@@ -313,13 +332,14 @@
  };
  
  /*
-@@ -774,6 +1029,18 @@
+@@ -774,6 +1048,19 @@
  MODULE_LICENSE("GPL");
  MODULE_DESCRIPTION("Cirrus Logic CS420x HD-audio codec");
  
 +/* --- MacBook9,1 (A1534) additions: begin ---
-+ * A1534_SRCID is a hash of this file plus a1534_pcm.h, a1534_match.h and
-+ * the vendored bring-up sequence, prefixed with the package version. The
++ * A1534_SRCID is a hash of this file plus a1534_pcm.h, a1534_match.h,
++ * a1534_snapshot.h, a1534_i2c.h and the vendored bring-up sequence (the
++ * Makefile's SRCIDFILES), prefixed with the package version. The
 + * verifier reads it from /sys/module/snd_hda_codec_cs420x/version, which
 + * describes the module that is actually LOADED - unlike modinfo, which
 + * describes whatever file is on disk right now.

@@ -1,0 +1,20 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+#
+# After every transaction that installs or upgrades a kernel, or this package,
+# print a WARNING block for each installed kernel of a series this package
+# does not support (kernel-series --hook). It builds nothing and never fails
+# the transaction: dkms.conf's BUILD_EXCLUSIVE_KERNEL already makes DKMS skip
+# such a kernel, and this says so where the user sees it. The name sorts after
+# 70-dkms-install.hook, so the warning follows DKMS's own output.
+
+[Trigger]
+Operation = Install
+Operation = Upgrade
+Type = Path
+Target = usr/lib/modules/*/vmlinuz
+Target = usr/src/macbook91-cs4208-*/dkms.conf
+
+[Action]
+Description = Checking installed kernels against the series macbook91-cs4208 supports...
+When = PostTransaction
+Exec = /usr/lib/macbook91-cs4208/kernel-series --hook

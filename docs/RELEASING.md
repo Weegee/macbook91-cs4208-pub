@@ -5,25 +5,44 @@ here is automatic: `packaging/promote-release.sh` does not commit, tag, push or
 publish. Creating a GitHub release needs the maintainer's authorization and passed
 release gates (sections 3 and 4 below).
 
-## 0. Only for a new kernel series
+## 0. Kernel series
+
+The package supports the CachyOS LTS series and the newest CachyOS series,
+and depends on the LTS headers: the LTS kernel is the default. The series
+before the newest stays while the one `local-changes.patch` applies to it at
+`--fuzz=0` and the module builds against its headers without a change (the
+headers package from the pacman cache, extracted into a scratch directory,
+is enough for that build); it goes when the next series arrives. There is one
+patch for every series and no series-dependent code. A kernel of any other
+series gets no module: DKMS skips it and the package's pacman hook warns
+about it after the transaction.
 
 The lockfile pins one kernel tag per series, and the package ships one derived
-`cs420x.c` and one header set for every series pinned (today 6.18 and 7.2). A
-tag it does not know is refused. A tag bump inside a shipped series replaces
-that series' newest tag; a new series also adds its dkms.conf
-`BUILD_EXCLUSIVE_KERNEL` entry (tests/run-tests.sh 4f checks the two agree).
+`cs420x.c` and one header set for every series pinned. The fetcher writes
+them to `kheaders/KERNEL-SERIES`, the one list: dkms.conf's
+`BUILD_EXCLUSIVE_KERNEL`, the pacman hook and `macbook91-audio-verify` all take
+it from there through `contrib/pacman/kernel-series`. A tag the lockfile does
+not know is refused. A tag bump inside a shipped series replaces that series'
+newest tag.
 
     packaging/fetch-upstream.sh --tag vX.Y.Z --accept-new
 
 records the new files' hashes in `packaging/upstream.lock`. `local-changes.patch`
 must still apply exactly (`--fuzz=0`); if it does not, the patch needs work
-first. Review the lockfile diff and commit it on its own.
+first. Before a new series is accepted, read the diff of `cs420x.c` and of the
+five headers against the previous series (quirk tables and
+`snd_hda_pick_fixup()`, jack, PCM and power management, struct layouts), check
+that the distribution's kernel did not patch those files, and build the module
+for every shipped series. Review the lockfile diff and commit it on its own.
+Dropping a series removes its rows from the lockfile, and the fetcher stops
+assembling it. `tests/run-tests.sh` reads the 7.2 sources for its source-level
+checks (`SERIES72`) and pins the 7.2 source identity, so dropping 7.2 moves
+both to another series in the same change.
 
 ## 1. Version
 
 - `VERSION`: `YYYYMMDD.NN` (the release date, `.01` for the first that day).
 - `packaging/arch/PKGBUILD`: `pkgver=` the same value, `pkgrel=1`.
-- `README.md`: the `pacman -U` lines name the package file with its version.
 - `docs/CHANGELOG.md`: a section for the new version on top.
 
 ## 2. Source tarball and pin
@@ -47,11 +66,10 @@ pinned tarball. Then, all on the committed tree:
 
 - `bash tests/run-tests.sh` with the tree assembled and the package built: 0
   failed. The hardware checks it cannot run stay BLOCKED. The totals recorded
-  in `docs/test-status.json` and `README.md` are those of a host with the
-  replacement module loaded; a host that runs the stock codec would report one
-  more passed and, with the two checks that compare those records BLOCKED, 253
-  passed, 0 failed, 10 blocked (derived and simulated in a scratch copy, not
-  run on such a host).
+  in `docs/test-status.json` (`regress.suite`) and `README.md` are those of a
+  host with the replacement module loaded; `regress.suite` also states what a
+  host running the stock codec reports, which runs one more test and blocks
+  the two checks that compare these records.
 - `namcap` on the package and on `packaging/arch/PKGBUILD`: no errors, every
   warning explained in `docs/NAMCAP.md`.
 - `git diff --check`, ShellCheck at warning level on the shipped scripts.
@@ -69,11 +87,13 @@ PASS. Record the result in `docs/test-status.json`.
 
 copies the PKGBUILD, .SRCINFO, install scriptlet, lockfile and tarball into
 `release/<VERSION>/`, writes a `STATUS.txt` template (with the checksum of the
-package built in `dist/`, which is not copied) and prunes release directories
-older than the two newest. Fill in
-`STATUS.txt`, then
+package built in `dist/`, which is not copied) and `SHA256SUMS` over the
+tracked files, and prunes release directories older than the two newest.
+Fill in `STATUS.txt`, then
 
     packaging/promote-release.sh --seal <VERSION>
+
+writes `SHA256SUMS` again, since it covers `STATUS.txt`.
 
 Update `docs/PROJECT_STATE.md` (its header date and the
 "Current promoted package" line) and `docs/test-status.json`, and commit

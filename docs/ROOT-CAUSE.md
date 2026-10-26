@@ -148,6 +148,22 @@ Note a genuine but *latent* mainline inconsistency found while checking this:
 `SND_PCI_QUIRK`, so its entries only ever match via the trailing fallback.
 It is not the cause of this bug and must not be "fixed" opportunistically.
 
+### Linux 7.3: the tables now match this machine (2026-10-26)
+
+Linux 7.3 added `SND_PCI_QUIRK(0x8086, 0x7270, "MacBookAir 7,2", ...)` to both
+CS4208 tables: `CS4208_MAC_AUTO` in `cs4208_fixup_tbl` and `CS4208_MBA6` in
+`cs4208_mac_fixup_tbl`. `snd_hda_pick_fixup()` tries the PCI subsystem id
+before the codec's, so on 7.3 this machine (PCI subsystem `8086:7270`) gets
+`CS4208_MBA6`, whose pin table marks the speaker pin `0x1d` unconnected; the
+stock 7.3 kernel log reads `picked fixup  for PCI SSID 8086:7270`. The
+statements above hold for the series up to 7.2. Since then the patched probe
+sets `codec->fixup_id = CS4208_GPIO0` on the A1534 path before
+`snd_hda_pick_fixup()` runs, which returns at once when a fixup is already
+set: every series applies the fixup measured above
+(`src/cs420x-a1534/LOCAL-CHANGES.md`, row 14), and `macbook91-audio-verify`
+FAILs when a mainline pin override shows up in the codec's
+`driver_pin_configs`.
+
 ## 4. Why a correct fixup is necessary but not sufficient
 
 The autoconfig line proves the parser *did* select pin `0x1d` as the sole

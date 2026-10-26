@@ -12,7 +12,8 @@
 #
 #   -o OUTDIR      parent directory for the timestamped baseline
 #                  (default: baselines/ under $XDG_STATE_HOME/macbook91-cs4208,
-#                  else ~/.local/state/macbook91-cs4208)
+#                  else ~/.local/state/macbook91-cs4208; under sudo, that of
+#                  the user who ran sudo)
 #   --privileged   additionally run the small set of root-only probes.
 #                  Without it, every root-only item is recorded as SKIPPED
 #                  and the collector still completes.
@@ -38,7 +39,22 @@ repo_root() {
 }
 
 ROOT="$(repo_root)"
-[ -n "$OUTPARENT" ] || OUTPARENT="${XDG_STATE_HOME:-$HOME/.local/state}/macbook91-cs4208/baselines"
+# Under sudo (--privileged) the invoking user's state directory, as
+# macbook91-runner does: root's own would hide the baseline from that user
+# and from the recovery archive.
+SUDO_OWNER=""
+CHOWN_ROOT=""
+if [ -n "${SUDO_USER:-}" ] && [ "$(id -u)" = 0 ]; then
+	SUDO_OWNER=$SUDO_USER
+fi
+if [ -z "$OUTPARENT" ]; then
+	if [ -n "$SUDO_OWNER" ]; then
+		CHOWN_ROOT="/home/$SUDO_OWNER/.local/state/macbook91-cs4208"
+		OUTPARENT="$CHOWN_ROOT/baselines"
+	else
+		OUTPARENT="${XDG_STATE_HOME:-$HOME/.local/state}/macbook91-cs4208/baselines"
+	fi
+fi
 
 STAMP="$(date -u +%Y%m%dT%H%M%SZ)"
 OUT="$OUTPARENT/$STAMP"
@@ -433,5 +449,11 @@ sha256sum "$0" > "$OUT/COLLECTOR.sha256"
 	printf 'bytes:    %s\n' "$(du -sb "$OUT" | cut -f1)"
 } > "$OUT/ZZ-summary.txt"
 
+# As macbook91-runner does: the state directory, so that the directories
+# mkdir -p created as root belong to that user too; an explicit -o only
+# the new baseline.
+if [ -n "$SUDO_OWNER" ]; then
+	chown -R "$SUDO_OWNER" "${CHOWN_ROOT:-$OUT}" 2>/dev/null || true
+fi
 printf 'baseline written to: %s\n' "$OUT"
 printf 'files: %s\n' "$(find "$OUT" -maxdepth 1 -type f | wc -l)"

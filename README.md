@@ -65,8 +65,8 @@ sudo pacman -U dist/macbook91-cs4208-dkms-*.pkg.tar.zst
 ```
 
 `make arch-pkg` assembles the upstream-derived sources at the newest kernel tag
-`packaging/upstream.lock` records for each supported series, 6.18 and 7.2 (one
-download from git.kernel.org, or none with `FETCH_ARGS="--offline --all"` and a
+`packaging/upstream.lock` records for each supported series (six files per
+series from git.kernel.org, or none with `FETCH_ARGS="--offline --all"` and a
 filled cache), writes the source tarball, and builds the package in
 `build/arch/` (copied to `dist/`). It needs a committed tree whose tarball
 checksum is pinned in `packaging/arch/PKGBUILD`; `make arch-pkg-dev` builds an
@@ -135,7 +135,7 @@ exactly why headphones always survived a resume.
 ```
 src/cs420x-a1534/   the module: mainline cs420x.c plus a gated A1534 path
 tools/              measurement tools, one entry point: macbook91-runner
-tests/              253 hermetic tests, no root, no hardware, no sound
+tests/              268 hermetic tests, no root, no hardware, no sound
 packaging/          the fetcher, its lockfile, the tarball and release scripts
 packaging/arch/     PKGBUILD, .SRCINFO and the install scriptlet
 Makefile, VERSION   dist, install and package targets; the version
@@ -193,12 +193,13 @@ measured on hardware on 2026-10-20 (`macbook91-runner jackstream`,
 not been run. On 20261015.01 or earlier: end the call, or stop every playback
 and capture for a few seconds, and the next capture works again.
 
-**Not confirmed:** a change of kernel *series* (say 7.2 to 7.3) has not
-happened on this machine; a kernel update within the series has, and DKMS
-rebuilt the module for it (2026-09-21, gate `hw.dkms_kernel_update`). A series
-the package does not ship fails closed (DKMS skips it, a direct build stops
-on the series check, and the wrong compiler family is refused), which bounds
-the risk without measuring it. **6.18 (LTS): `macbook91-audio-verify`
+**Not confirmed:** 20261026.01 has not run on hardware, and no kernel of the 7.3
+series has run this module: it builds for 7.3.0-4-cachyos with no compiler
+diagnostic, nothing more. A kernel update within a series has happened, and
+DKMS rebuilt the module for it (2026-09-21, gate `hw.dkms_kernel_update`). A
+series the package does not support fails closed (DKMS skips it, the pacman
+hook warns about it after the transaction, a direct build stops on the series
+check, and the wrong compiler family is refused). **6.18 (LTS): `macbook91-audio-verify`
 PASS on hardware** (2026-10-20, 6.18.55-2-cachyos-lts, module
 `20261020.03+7fc96add428d9fce`: 31 passed, 0 failed, 2 skipped; the speaker
 tone, microphone, headphone detect and the capture across plug and unplug were

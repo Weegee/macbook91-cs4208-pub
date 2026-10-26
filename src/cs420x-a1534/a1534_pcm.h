@@ -420,7 +420,6 @@ static void a1534_hp_jack_callback(struct hda_codec *codec,
 {
 	struct cs_spec *spec = codec->spec;
 	struct a1534_state *st = &spec->a1534;
-	unsigned int tag;
 	int hp;
 
 	/*
@@ -449,7 +448,6 @@ static void a1534_hp_jack_callback(struct hda_codec *codec,
 		goto out;
 	}
 	st->hp = hp;
-	tag = st->stream_tag;
 	mutex_unlock(&st->lock);
 
 	/*
@@ -469,8 +467,24 @@ static void a1534_hp_jack_callback(struct hda_codec *codec,
 	 * Re-check under the lock: a prepare or cleanup may have run while the
 	 * sequence was replaying. The speaker pin follows jack validity alone,
 	 * because a jack change with no stream running must still mute the
-	 * speakers; the stream re-point additionally requires that it is still
-	 * the same stream.
+	 * speakers.
+	 *
+	 * Both converters are cleaned up do_now first. The replay writes
+	 * SET_CHANNEL_STREAMID 0x10 (stream tag 1) and a stream format to
+	 * converters 0x02 and 0x0a behind the core's back
+	 * (vendored/a1534_sequence.h), and snd_hda_codec_setup_stream() writes
+	 * only what differs from the values it cached. Without the cleanup a
+	 * converter with no stream keeps listening to tag 1, which belongs to
+	 * another stream (HDMI's, say) whenever that one holds it, and a stream
+	 * whose tag and format did not change is never written back. The
+	 * cleanup writes zero and forgets the cached values, as
+	 * a1534_capture_resync() does for the capture converter.
+	 *
+	 * A prepared stream is then re-pointed to the converter of the current
+	 * jack state, a1534_active_dac(): the state this callback sampled, or a
+	 * newer one that a prepare sampled while the replay ran. That prepare
+	 * set its stream up before the replay could overwrite it, so it is
+	 * re-pointed too.
 	 *
 	 * Known limitation, not an oversight: st->hp carries two meanings - the
 	 * jack state the PCM last sampled (written by .open, .prepare and
@@ -482,12 +496,12 @@ static void a1534_hp_jack_callback(struct hda_codec *codec,
 	 * any measurement in this repository; separating the two meanings needs a
 	 * second field in struct a1534_state, which lives in local-changes.patch.
 	 */
-	if (st->hp == hp) {
+	__snd_hda_codec_cleanup_stream(codec, A1534_SPEAKER_DAC, 1);
+	__snd_hda_codec_cleanup_stream(codec, A1534_HP_DAC, 1);
+	if (st->hp == hp)
 		a1534_speaker_pin(codec, !hp);
-		if (st->stream_tag && st->stream_tag == tag)
-			a1534_route_stream(codec, st,
-					   hp ? A1534_HP_DAC : A1534_SPEAKER_DAC);
-	}
+	if (st->stream_tag)
+		a1534_route_stream(codec, st, a1534_active_dac(st));
 	mutex_unlock(&st->lock);
 
 	/*
@@ -536,6 +550,7 @@ static int a1534_init(struct hda_codec *codec)
 {
 	struct cs_spec *spec = codec->spec;
 	struct a1534_state *st = &spec->a1534;
+	struct hda_jack_callback *cb;
 	int err;
 
 	int hp;
@@ -561,8 +576,16 @@ static int a1534_init(struct hda_codec *codec)
 	 * (sound/hda/common/jack.c:296-306,335,
 	 * in linux 7.2.4)
 	 */
-	snd_hda_jack_detect_enable_callback(codec, A1534_HP_PIN,
-					    a1534_hp_jack_callback);
+	cb = snd_hda_jack_detect_enable_callback(codec, A1534_HP_PIN,
+						 a1534_hp_jack_callback);
+	/*
+	 * An ERR_PTR (out of memory) means output will not follow the jack.
+	 * Say so rather than lose it silently; it is not fatal, because this
+	 * also runs on resume and the speakers work without the callback.
+	 */
+	if (IS_ERR(cb))
+		codec_warn(codec, "A1534: no headphone jack callback (%ld); output will not follow the jack\n",
+			   PTR_ERR(cb));
 	return 0;
 }
 

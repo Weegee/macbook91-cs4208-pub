@@ -1,6 +1,15 @@
 # Project state
 
-Version 20261021.01 - updated 2026-10-21, adding the first public release (next paragraph) to the 2026-10-20 state below.
+Version 20261026.01 - updated 2026-10-26, adding the candidate 20261026.01 (next paragraph) to the 2026-10-21 state below.
+
+**20261026.01 is a candidate: built and gated in software, not promoted (2026-10-26).** Kernel series 7.3 (tag v7.3, for
+7.3.0-4-cachyos) is supported next to 6.18 (LTS) and 7.2. On a match the patched probe sets the A1534 fixup to
+CS4208_GPIO0 before the quirk tables are consulted, because Linux 7.3 added PCI-SSID rows for 8086:7270 that select
+CS4208_MBA6 (`docs/ROOT-CAUSE.md`). `kheaders/KERNEL-SERIES` is the one series list: dkms.conf, a pacman hook that
+warns about installed kernels of other series, and `macbook91-audio-verify` read it. The package depends on
+`linux-cachyos-lts-headers`; the LTS kernel is the default. Software gates: `regress.suite` and `build.series_7_3` in
+`docs/test-status.json`. Hardware: NOT RUN for 20261026.01 (`hw.runtime_20261026_01`); the gate is `docs/RELEASING.md` section 4,
+on the LTS kernel and on 7.3. The current promoted package stays 20261021.01 until then.
 
 **History note.** 20261021.01 is the first public release. Everything below that names an earlier version (tags, GitHub releases,
 release assets, installs, package checksums, `release/` directories) describes the earlier, private development line of this
@@ -218,6 +227,10 @@ failed. Its restore
 line is present like all the others.
 
 ## Exact next action
+
+**20261026.01: the hardware gate** (`docs/RELEASING.md` section 4) on the LTS kernel and on 7.3.0-4-cachyos, then
+promotion (section 5). If the gate fails, 20261021.01 stays the promoted package, and booting the LTS kernel keeps
+audio working.
 
 **20261021.01 is promoted, tagged and published** (`docs/RELEASING.md` sections 5 and 6). Hardware: NOT RUN for 20261021.01. If the maintainer installs it, the check is
 one `macbook91-audio-verify` run per kernel in use, recorded in `docs/test-status.json` (`hw.runtime_20261021_01_carried_over` then

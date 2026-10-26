@@ -137,21 +137,20 @@ package does not change your suspend mode.
 
 ## Building it
 
-You need the kernel headers of the kernel you are building **for** - that is
-the only distribution-specific requirement, and this package does not name a
-kernel of its own:
+You need the kernel headers of the kernel you are building **for**. The
+package depends on those of the CachyOS LTS kernel, the supported default,
+and builds for the current CachyOS kernel too once its headers are installed:
 
 ```
-sudo pacman -S linux-cachyos-headers      # CachyOS default kernel
-sudo pacman -S linux-cachyos-lts-headers  # CachyOS LTS
-sudo pacman -S linux-headers              # Arch default kernel
-sudo pacman -S linux-lts-headers          # Arch LTS
+sudo pacman -S linux-cachyos-lts-headers  # CachyOS LTS, the default
+sudo pacman -S linux-cachyos-headers      # the current CachyOS kernel
 ```
 
 The compiler follows from that kernel's own `.config`, not from this machine:
 a kernel built with clang needs `clang lld llvm`, a kernel built with GCC
-needs `gcc`. Nothing guesses on your behalf - `make check` and the install
-scriptlet each name the one that is missing, and the command that installs it.
+needs `gcc`. The GCC the LTS kernel needs comes with `dkms`, and
+`linux-cachyos-headers` brings the clang, lld and llvm of its kernel; `make
+check` names a compiler that is still missing, and the command that installs it.
 
 Then, from the repository root:
 
@@ -159,28 +158,32 @@ Then, from the repository root:
 make arch-pkg-dev
 ```
 
-That assembles the upstream-derived sources first — one download, from
-git.kernel.org, every file checked against `packaging/upstream.lock` before it
-is allowed into the tree — then stages the tarball and runs `makepkg`. Every
+That assembles the upstream-derived sources first — six files per kernel
+series, from git.kernel.org, every file checked against
+`packaging/upstream.lock` before it is allowed into the tree — then stages the tarball and runs `makepkg`. Every
 rebuild afterwards, including the automatic DKMS rebuild during a kernel
 upgrade, touches no network at all.
 
 One rule worth knowing: the private HDA headers are per **kernel series**.
-The package ships a separate set for 6.18 (the LTS series) and 7.2, and the
-build picks the set that matches the target kernel's `utsrelease.h`. A series
-the package does not ship is refused, and `dkms.conf` limits DKMS to the
-shipped series, so a 6.19 or 7.3 kernel is skipped rather than built against
-the wrong headers. They are internal structure definitions with no ABI
+The package ships a separate set for every series in `kheaders/KERNEL-SERIES`:
+the CachyOS LTS series, the newest CachyOS series, and the one before it while
+the same patch still applies to it. The build picks the set that matches the
+target kernel's `utsrelease.h`. A series the package does not ship is
+refused, `dkms.conf` limits DKMS to the shipped series, and the package's
+pacman hook prints a warning for every installed kernel of another series,
+so such a kernel is skipped rather than built against the wrong headers. They are internal structure definitions with no ABI
 promise, so a mismatch can be silent, which is exactly the class of bug this
 project has already paid for once. A new series needs its tag in
 `packaging/upstream.lock` first: `packaging/fetch-upstream.sh --tag vX.Y.Z
 --accept-new` records its hashes, and `local-changes.patch` must still apply
 exactly (`--fuzz=0`) or the fetch fails. Review and commit the lockfile
 change; `make arch-pkg-dev` then builds from the newest tag it lists for each
-series. Do not override the check.
+series. There is no override.
 
-Status: 7.2 is the series the speaker, microphone and suspend results were
-obtained on. 6.18 (LTS): `macbook91-audio-verify` passed on this machine under
+Status: 20261026.01 has not run on hardware yet; it builds for 6.18 (LTS), 7.2 and
+7.3 with no compiler diagnostic. No kernel of the 7.3 series has run this
+module on hardware. 7.2 is the series the speaker, microphone and suspend
+results were obtained on. 6.18 (LTS): `macbook91-audio-verify` passed on this machine under
 6.18.55-2-cachyos-lts with module `20261020.03+7fc96add428d9fce` (31 passed,
 0 failed, 2 skipped; the listening and jack checks were confirmed by the
 maintainer). Suspend/resume on 6.18 is NOT VERIFIED: no suspend happened in that
@@ -246,6 +249,11 @@ macbook91-cs4208-dkms` removes again:
   cannot collide with another package's:
   `/usr/share/macbook91-cs4208/acp/macbook91-cs4208.conf` and
   `/usr/share/macbook91-cs4208/acp/macbook91-output-speaker.conf`;
+- the pacman hook `/usr/share/libalpm/hooks/71-macbook91-cs4208-series.hook`
+  and the script it runs, `/usr/lib/macbook91-cs4208/kernel-series`: after a
+  transaction that installs a kernel or this package, it prints a warning for
+  each installed kernel of a series this package does not support. It builds
+  nothing and changes nothing; `macbook91-audio-verify` asks the same script;
 - this README, as `/usr/share/doc/macbook91-cs4208-dkms/README.md`.
 
 Removing the package removes every one of those files and runs depmod. The
