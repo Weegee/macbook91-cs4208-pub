@@ -1,35 +1,84 @@
 #!/usr/bin/env bash
 # SPDX-License-Identifier: GPL-3.0-or-later
 #
-# dev-audio-collect.sh — read-only diagnostic collector for MacBook9,1 (A1534)
+# dev-audio-collect.sh: read-only diagnostic collector for MacBook9,1 (A1534)
 # CS4208 audio work.
 #
 # Collects only the machine facts this project needs. It never writes outside
 # its own output directory, never loads/unloads modules, never changes mixer,
 # PipeWire or power settings, and never records audio.
 #
-# Usage: dev-audio-collect.sh [-o OUTDIR] [--privileged]
-#
-#   -o OUTDIR      parent directory for the timestamped baseline
-#                  (default: baselines/ under $XDG_STATE_HOME/macbook91-cs4208,
-#                  else ~/.local/state/macbook91-cs4208; under sudo, that of
-#                  the user who ran sudo)
-#   --privileged   additionally run the small set of root-only probes.
-#                  Without it, every root-only item is recorded as SKIPPED
-#                  and the collector still completes.
+# The text interface follows the house text HIG (text-hig skill). The files in
+# the baseline directory are evidence, not terminal output: their "###" headers
+# and "(absent)" markers stay as they are, so older and newer baselines compare.
 #
 set -uo pipefail
 
+PROG=dev-audio-collect.sh
+COLLECTOR_VERSION=1
+DOCS_URL=https://github.com/Weegee/macbook91-cs4208-pub
 PRIVILEGED=0
 OUTPARENT=""
 
+usage() {
+	cat <<USAGE
+Usage: $PROG [OPTIONS]
+
+Collects the machine facts MacBook9,1 (A1534) CS4208 audio work needs, into a
+timestamped directory. Read-only: it writes nowhere else, loads and unloads no
+module, changes no mixer, PipeWire or power setting, and records no audio.
+
+Examples:
+  $PROG                       collect without root
+  sudo $PROG --privileged     also run the small set of root-only probes
+
+Options:
+  -o, --output DIR   parent directory for the timestamped baseline (default:
+                     baselines/ under \$XDG_STATE_HOME/macbook91-cs4208, else
+                     ~/.local/state/macbook91-cs4208; under sudo, that of the
+                     user who ran sudo)
+      --privileged   also run the root-only probes; without it every root-only
+                     item is recorded as SKIPPED and the collector completes
+  -h, --help         show this help
+  -V, --version      show the version
+
+Environment:
+  XDG_STATE_HOME   base of the state directory (default ~/.local/state)
+
+Files:
+  DIR/TIMESTAMP/   the baseline: one NN-name.txt file per topic, SHA256SUMS
+
+Exit status:
+  0  baseline written
+  1  the baseline directory could not be created
+  2  usage error
+
+Docs and bug reports: $DOCS_URL
+USAGE
+}
+
+usage_error() {
+	printf '%s: error: %s\nHelp: %s --help\n' "$PROG" "$1" "$PROG" >&2
+	exit 2
+}
+
+# -h and -V win wherever they stand (HIL-1, HIL-2).
+for a in "$@"; do
+	case "$a" in
+		-h|--help) usage; exit 0 ;;
+		-V|--version) printf '%s %s\n' "$PROG" "$COLLECTOR_VERSION"; exit 0 ;;
+	esac
+done
+
 while [ $# -gt 0 ]; do
 	case "$1" in
-		-o) [ $# -ge 2 ] || { printf -- '-o needs a directory\n' >&2; exit 2; }
-		    OUTPARENT=$2; shift 2 ;;
+		-o|--output)
+			[ $# -ge 2 ] || usage_error "$1 needs a directory"
+			OUTPARENT=$2; shift 2 ;;
+		--output=*) OUTPARENT=${1#*=}; shift ;;
 		--privileged) PRIVILEGED=1; shift ;;
-		-h|--help) sed -n '2,20p' "$0"; exit 0 ;;
-		*) printf 'unknown argument: %s\n' "$1" >&2; exit 2 ;;
+		-*) usage_error "unknown option '$1'" ;;
+		*) usage_error "unexpected argument '$1'" ;;
 	esac
 done
 
@@ -58,7 +107,7 @@ fi
 
 STAMP="$(date -u +%Y%m%dT%H%M%SZ)"
 OUT="$OUTPARENT/$STAMP"
-mkdir -p "$OUT" || { printf 'cannot create %s\n' "$OUT" >&2; exit 1; }
+mkdir -p "$OUT" || { printf '%s: error: cannot create %s\n' "$PROG" "$OUT" >&2; exit 1; }
 
 # --- helpers ---------------------------------------------------------------
 
@@ -94,7 +143,7 @@ have() { command -v "$1" >/dev/null 2>&1; }
 # --- 1. identity and machine ----------------------------------------------
 
 {
-	printf 'collector-version: 1\n'
+	printf 'collector-version: %s\n' "$COLLECTOR_VERSION"
 	printf 'collected-utc: %s\n' "$STAMP"
 	printf 'hostname: %s\n' "$(hostname)"
 	printf 'privileged-run: %s\n' "$PRIVILEGED"
@@ -455,5 +504,5 @@ sha256sum "$0" > "$OUT/COLLECTOR.sha256"
 if [ -n "$SUDO_OWNER" ]; then
 	chown -R "$SUDO_OWNER" "${CHOWN_ROOT:-$OUT}" 2>/dev/null || true
 fi
-printf 'baseline written to: %s\n' "$OUT"
-printf 'files: %s\n' "$(find "$OUT" -maxdepth 1 -type f | wc -l)"
+printf '%s: note: wrote %s files\n' "$PROG" "$(find "$OUT" -maxdepth 1 -type f | wc -l)" >&2
+printf '%s\n' "$OUT"

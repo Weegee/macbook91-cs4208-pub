@@ -161,10 +161,55 @@ def identical(sweep_result):
     return all(v == vals[0] for v in vals[1:])
 
 
+PROG = 'macbook91-amp-transport'
+DOCS_URL = 'https://github.com/Weegee/macbook91-cs4208-pub'
+
+
+class HelpFormatter(argparse.RawDescriptionHelpFormatter):
+    """The house help layout: a capitalised Usage: heading."""
+    def _format_usage(self, usage, actions, groups, prefix):
+        return super()._format_usage(usage, actions, groups, prefix or 'Usage: ')
+
+
+
+class Parser(argparse.ArgumentParser):
+    def error(self, message):
+        sys.stderr.write('%s: error: %s\nHelp: %s --help\n'
+                         % (self.prog, message, self.prog))
+        sys.exit(2)
+
+
+def _version():
+    here = os.path.dirname(os.path.abspath(__file__))
+    try:
+        with open(os.path.join(here, '..', 'VERSION')) as f:
+            return f.read().strip()
+    except OSError:
+        return 'unknown'
+
+
 def main():
-    ap = argparse.ArgumentParser()
-    ap.add_argument('--json')
-    ap.add_argument('--card', type=int, default=0)
+    # Abweichung von KAN-3: exit 2 means "could not measure at all" (the
+    # runner reads it), and argparse reports a usage error with 2 as well.
+    ap = Parser(
+        prog=PROG, usage='%(prog)s [--card N] [--json FILE]',
+        description="Check that the CS4208's I2C read path can tell an "
+                    'amplifier address from an empty one. Needs root.',
+        epilog='Examples:\n'
+               '  sudo %(prog)s\n'
+               '  sudo %(prog)s --card 1 --json transport.json\n\n'
+               'Exit status:\n'
+               '  0  measurement completed (the verdict may still be FAIL)\n'
+               '  2  could not measure (no device, no permission) or usage error\n\n'
+               'Docs and bug reports: ' + DOCS_URL,
+        formatter_class=HelpFormatter)
+    ap._optionals.title = 'Options'
+    ap.add_argument('--json', metavar='FILE',
+                    help='also write the full result to FILE as JSON')
+    ap.add_argument('--card', type=int, default=0, metavar='N',
+                    help='sound card number (default 0)')
+    ap.add_argument('-V', '--version', action='version',
+                    version='%s (macbook91-cs4208-dkms) %s' % (PROG, _version()))
     args = ap.parse_args()
 
     r = {'tool': 'macbook91-amp-transport', 'version': '1',
@@ -179,11 +224,12 @@ def main():
     try:
         c = Codec(args.card)
     except PermissionError:
-        print('BLOCKED: /dev/snd/hwC%dD0 needs CAP_SYS_RAWIO (run as root)' % args.card,
-              file=sys.stderr)
+        print('%s: error: /dev/snd/hwC%dD0 needs CAP_SYS_RAWIO, run as root'
+              % (PROG, args.card), file=sys.stderr)
         return 2
     except FileNotFoundError:
-        print('BLOCKED: no hwdep device for card %d' % args.card, file=sys.stderr)
+        print('%s: error: no hwdep device for card %d' % (PROG, args.card),
+              file=sys.stderr)
         return 2
 
     # --- capture the state BEFORE deciding anything ----------------------
@@ -489,7 +535,7 @@ def main():
                    'I2C bridge enable returned to the value found at entry')
         except OSError as e:
             r['restore'] = {'error': str(e), 'ok': False}
-            print('restore FAILED: %s' % e, file=sys.stderr)
+            print('%s: error: restore failed: %s' % (PROG, e), file=sys.stderr)
             record('probe.restored_entry_state', 'FAIL',
                    'restore raised %s; coef 0x00 may not be back to %#06x'
                    % (e, original_enable))

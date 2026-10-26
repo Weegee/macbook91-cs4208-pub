@@ -22,8 +22,10 @@ Needs CAP_SYS_RAWIO.
     macbook91-codec-state diff BEFORE.json AFTER.json
 """
 
+import difflib
 import fcntl
 import json
+import os
 import struct
 import sys
 import time
@@ -305,24 +307,97 @@ def diff(a, b):
     return out
 
 
+PROG = 'macbook91-codec-state'
+DOCS_URL = 'https://github.com/Weegee/macbook91-cs4208-pub'
+COMMANDS = ('capture', 'diff')
+
+# Abweichung von KAN-3: the exit status carries the measurement result and
+# macbook91-runner reads it, so 2 means "could not measure" and 3 means usage
+# error or unreadable input. The stable meanings are listed in the help.
+HELP = """\
+Usage: macbook91-codec-state capture [--card N] FILE
+       macbook91-codec-state diff BEFORE AFTER
+
+Capture the state of the CS4208 codec as JSON, or compare two captures.
+
+Examples:
+  sudo macbook91-codec-state capture state.json
+  macbook91-codec-state diff before.json after.json
+
+Commands:
+  capture  read the codec and write FILE (needs CAP_SYS_RAWIO, run as root)
+  diff     list the fields that differ between two captures
+
+Options:
+  --card N       sound card number (default 0)
+  -h, --help     show this help and exit
+  -V, --version  show the version and exit
+
+Exit status:
+  0  done; for diff: no field differs apart from the volatile ones
+  1  diff: fields differ
+  2  could not measure (no device, no permission)
+  3  usage error or unreadable input
+
+Docs and bug reports: %s
+""" % DOCS_URL
+
+
+def _version():
+    here = os.path.dirname(os.path.abspath(__file__))
+    try:
+        with open(os.path.join(here, '..', 'VERSION')) as f:
+            return f.read().strip()
+    except OSError:
+        return 'unknown'
+
+
+def fail(msg, hint=None, status=3):
+    print('%s: error: %s' % (PROG, msg), file=sys.stderr)
+    if hint:
+        print('Did you mean: %s %s' % (PROG, hint), file=sys.stderr)
+    print('Help: %s --help' % PROG, file=sys.stderr)
+    return status
+
+
+def load(path):
+    try:
+        with open(path) as f:
+            return json.load(f)
+    except (OSError, ValueError) as e:
+        print('%s: error: cannot read %s: %s' % (PROG, path, e), file=sys.stderr)
+        return None
+
+
 def main():
     args = sys.argv[1:]
+    if any(a in ('-h', '--help') for a in args):
+        print(HELP, end='')
+        return 0
+    if any(a in ('-V', '--version') for a in args):
+        print('%s (macbook91-cs4208-dkms) %s' % (PROG, _version()))
+        return 0
+
     card = 0
-    if args[:2] == ['capture', '--card'] and len(args) >= 4:
-        if not args[2].isdigit():
-            print(__doc__)
-            return 3
+    if args[:2] == ['capture', '--card']:
+        if len(args) < 3 or not args[2].isdigit():
+            return fail('--card needs a card number')
         card = int(args[2])
         args = ['capture'] + args[3:]
-    if len(args) >= 2 and args[0] == 'capture':
+
+    if args[:1] == ['capture']:
+        if len(args) != 2:
+            return fail('capture needs exactly one output FILE'
+                        if len(args) < 2 else 'unexpected argument: ' + args[2])
         try:
             st, c = capture(card)
         except PermissionError:
-            print('BLOCKED: /dev/snd/hwC%dD0 needs CAP_SYS_RAWIO (run as root)' % card,
-                  file=sys.stderr)
+            print('%s: error: /dev/snd/hwC%dD0 needs CAP_SYS_RAWIO, run as root'
+                  % (PROG, card), file=sys.stderr)
             return 2
         except FileNotFoundError:
-            print('BLOCKED: no HDA hwdep device', file=sys.stderr)
+            print('%s: error: no HDA hwdep device for card %d' % (PROG, card),
+                  file=sys.stderr)
             return 2
         with open(args[1], 'w') as f:
             json.dump(st, f, indent=1, sort_keys=True)
@@ -330,7 +405,7 @@ def main():
               % (len(st.get('nodes', {})), st.get('fields', 0),
                  st.get('read_errors', 0), args[1]))
         if st.get('error'):
-            print('ERROR: %s' % st['error'], file=sys.stderr)
+            print('%s: error: %s' % (PROG, st['error']), file=sys.stderr)
             return 2
         print('  vendor %s  subsystem: param %s verb %s  AFG %s  gpio %s'
               % (st.get('vendor_id'), st.get('subsystem_id_param_root'),
@@ -338,9 +413,14 @@ def main():
                  st.get('gpio')))
         return 0
 
-    if len(sys.argv) >= 4 and sys.argv[1] == 'diff':
-        a = json.load(open(sys.argv[2]))
-        b = json.load(open(sys.argv[3]))
+    if args[:1] == ['diff']:
+        if len(args) != 3:
+            return fail('diff needs BEFORE and AFTER'
+                        if len(args) < 3 else 'unexpected argument: ' + args[3])
+        a = load(args[1])
+        b = load(args[2])
+        if a is None or b is None:
+            return 3
         d = diff(a, b)
         real = [x for x in d if x[1] not in VOLATILE]
         print('%d differing fields (%d after dropping the volatile ones)'
@@ -351,8 +431,12 @@ def main():
             print('%-7s %-22s %-14s %s%s' % (nid or '-', k, va, vb, mark))
         return 0 if not real else 1
 
-    print(__doc__)
-    return 3
+    if not args:
+        return fail('no command given')
+    if args[0].startswith('-'):
+        return fail('unknown option: ' + args[0])
+    near = difflib.get_close_matches(args[0], COMMANDS, n=1)
+    return fail('unknown command: ' + args[0], near[0] if near else None)
 
 
 if __name__ == '__main__':

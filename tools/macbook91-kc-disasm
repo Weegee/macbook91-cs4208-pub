@@ -45,7 +45,7 @@ class KC:
             end = self.buf.index(b'\0', p + noff)
             if self.buf[p + noff:end].decode() == want:
                 return vmaddr, fileoff
-        raise SystemExit('kext not found in collection: ' + want)
+        raise SystemExit('%s: error: kext not found in collection: %s' % (PROG, want))
 
     def load(self, bundle):
         self.vmaddr, self.hdr = self.fileset(bundle)
@@ -87,14 +87,14 @@ class KC:
             vm, vmsz, fo, fsz = struct.unpack_from('<QQQQ', self.buf, p + 24)
             if vm <= addr < vm + fsz:
                 return fo + (addr - vm)
-        raise SystemExit('address %#x is in no mapped segment' % addr)
+        raise SystemExit('%s: error: address %#x is in no mapped segment' % (PROG, addr))
 
     def sym(self, name):
         hits = [(a, n) for a, n in self.syms if n == name or n == '_' + name]
         if not hits:
             hits = [(a, n) for a, n in self.syms if name in n]
         if not hits:
-            raise SystemExit('no symbol matching ' + name)
+            raise SystemExit('%s: error: no symbol matching %s' % (PROG, name))
         if len(hits) > 1:
             sys.stderr.write('note: %d symbols match, using the first\n' % len(hits))
         return hits[0]
@@ -118,9 +118,64 @@ def demangle(names):
     return p.stdout.splitlines()
 
 
+PROG = 'macbook91-kc-disasm'
+HELP = '''\
+Usage: macbook91-kc-disasm KERNELCACHE KEXT MODE [ARGUMENT...]
+
+Disassemble or inspect one kext inside a macOS kernel collection. Read-only;
+reads no network and runs nothing it reads. Addresses are the collection's
+unslid vmaddrs.
+
+Examples:
+  macbook91-kc-disasm kc com.apple.driver.AppleHDA syms Cirrus
+  macbook91-kc-disasm kc com.apple.driver.AppleHDA dis 0xfffffe0007a1b2c0
+
+Modes:
+  syms PATTERN...      list the symbols that contain a pattern
+  dis SYMBOL|ADDR [N]  disassemble a function (N bytes)
+  hex ADDR N           dump N bytes
+  segs                 list the segments and sections
+  xref ADDR            find the calls to an address
+
+Options:
+  -h, --help     show this help and exit
+  -V, --version  show the version and exit
+
+Exit status:
+  0  done
+  1  the file could not be read or the request does not match
+  2  usage error
+''' + '\nDocs and bug reports: https://github.com/Weegee/macbook91-cs4208-pub\n'
+
+def cli(prog, help_text, minimum):
+    """-h/--help and -V/--version win anywhere; too few arguments exit 2."""
+    args = sys.argv[1:]
+    if any(a in ('-h', '--help') for a in args):
+        print(help_text, end='')
+        sys.exit(0)
+    if any(a in ('-V', '--version') for a in args):
+        here = os.path.dirname(os.path.abspath(__file__))
+        try:
+            with open(os.path.join(here, '..', 'VERSION')) as f:
+                ver = f.read().strip()
+        except OSError:
+            ver = 'unknown'
+        print('%s (macbook91-cs4208-dkms) %s' % (prog, ver))
+        sys.exit(0)
+    if len(args) < minimum:
+        print('%s: error: %s\nHelp: %s --help'
+              % (prog, 'no arguments given' if not args else 'too few arguments',
+                 prog), file=sys.stderr)
+        sys.exit(2)
+
+
 def main():
+    cli(PROG, HELP, 3)
     kcpath, bundle, mode = sys.argv[1], sys.argv[2], sys.argv[3]
-    kc = KC(kcpath)
+    try:
+        kc = KC(kcpath)
+    except OSError as e:
+        raise SystemExit('%s: error: cannot read %s: %s' % (PROG, kcpath, e.strerror))
     kc.load(bundle)
 
     if mode == 'segs':
@@ -211,7 +266,7 @@ def main():
             os.unlink(tmp)
         return
 
-    raise SystemExit('unknown mode ' + mode)
+    raise SystemExit('%s: error: unknown mode: %s\nHelp: %s --help' % (PROG, mode, PROG))
 
 
 main()

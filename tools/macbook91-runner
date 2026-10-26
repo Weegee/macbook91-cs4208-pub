@@ -90,7 +90,84 @@ JACKSTREAM_FIFO=""
 log()  { printf '%s\n' "$*" | tee -a "$REPORT" ; }
 logq() { printf '%s\n' "$*" >>"$REPORT" ; }
 hr()   { log "" ; log "== $* ==" ; }
-die()  { printf 'macbook91-runner: %s\n' "$*" >&2 ; exit 3 ; }
+# Text interface: the house text HIG (text-hig skill). Named deviation:
+# Abweichung von KAN-3: the exit status is the verdict, so 2 means BLOCKED and
+# 4 INCOMPLETE; usage and runtime errors end with 3. The verdict codes are the
+# interface the run reports and the notes already use, so they stay (STA-1).
+die()  { printf 'macbook91-runner: error: %s\n' "$*" >&2 ; exit 3 ; }
+usage_error() { # usage_error MESSAGE [SUGGESTED COMMAND]
+	printf 'macbook91-runner: error: %s\n' "$1" >&2
+	[ -z "${2:-}" ] || printf 'Did you mean: macbook91-runner %s\n' "$2" >&2
+	printf 'Help: macbook91-runner --help\n' >&2
+	exit 3
+}
+
+usage() {
+	cat <<USAGE
+Usage: macbook91-runner COMMAND [OPTIONS]
+
+Runs MacBook9,1 audio measurements. Every run lands in one directory that
+survives a reboot.
+
+Examples:
+  macbook91-runner selfcheck          check the tool itself; touches no hardware
+  sudo macbook91-runner probe         measure the amplifier transport
+  macbook91-runner report             print the last stored run
+
+Commands:
+  selfcheck          unprivileged; no hardware is touched
+  preflight          unprivileged; identity and versions
+  probe              privileged; the amplifier transport
+  cycle              privileged; suspend and resume, needs --allow-suspend
+  jackstream         privileged; a real capture plus a safe playback with the
+                     headphones plugged and unplugged once, checking whether
+                     either stream survives the AFG power cycling the jack
+                     callback does
+  wake               measure what wakes the machine early
+  report [RUNID]     print a stored run again
+  diff [A B]         what changed between two captures (default: the last two)
+  help               show this help
+
+Options:
+  --with-stream      probe: also capture the state while a stream of digital
+                     silence is running
+  --allow-suspend    cycle: the machine may suspend (needs a test window)
+  --disarm LIST      wake: switch these wake sources off, for example
+                     RP09,XHC1, and restore them exactly afterwards (root)
+  --card N           use ALSA card N; it must carry the CS4208
+  -h, --help         show this help
+  -V, --version      show the version
+
+Environment:
+  MACBOOK91_STATE_DIR   base of the state directory (default: the home of the
+                        user who ran sudo, else \$HOME)
+
+Files:
+  ~/.local/state/macbook91-cs4208/runs/RUNID/   report.txt, results.json and
+                                                state.json of one run
+
+Exit status:
+  0    PASS
+  1    FAIL
+  2    BLOCKED: a test could not run
+  3    usage error, runtime error or an unclassified verdict
+  4    INCOMPLETE: a mandatory test did not run
+  130  interrupted with Ctrl+C; the machine state is restored first
+  143  terminated with SIGTERM; the machine state is restored first
+
+Docs and bug reports: https://github.com/Weegee/macbook91-cs4208-pub
+USAGE
+}
+
+# The command a mistyped one most likely meant, for the error message (HIL-6).
+suggest_command() {
+	local typed=$1 c
+	[ "${#typed}" -ge 3 ] || return 0
+	for c in selfcheck preflight probe cycle jackstream wake report diff; do
+		case $c in "$typed"*) echo "$c"; return 0 ;; esac
+		case $typed in "$c"*) echo "$c"; return 0 ;; esac
+	done
+}
 
 # result NAME STATUS DETAIL [mandatory]
 result() {
@@ -742,7 +819,7 @@ suspended_seconds() {
 }
 
 cmd_cycle() {
-	[ "$(id -u)" = 0 ] || die "cycle needs root"
+	[ "$(id -u)" = 0 ] || die "cycle needs root for suspend and the codec capture; run it with sudo"
 	if [ "$ALLOW_SUSPEND" != yes ]; then
 		result cycle.gate BLOCKED "refusing to suspend without --allow-suspend and a confirmed test window" m
 		return
@@ -1016,11 +1093,19 @@ cmd_report() {
 
 COMMAND=${1:-}
 shift || true
+# -h and --version win wherever they stand (HIL-1, HIL-2).
+for a in "$COMMAND" "$@"; do
+	case $a in
+		-h|--help) usage; exit 0 ;;
+		-V|--version) printf 'macbook91-runner %s\n' "$VERSION"; exit 0 ;;
+	esac
+done
 case $COMMAND in
 	selfcheck|preflight|probe|cycle|wake|jackstream) ;;
 	report|diff) : ;;
-	-h|--help|"") sed -n '2,39p' "$SELF" | sed 's/^# \{0,1\}//' ; exit 0 ;;
-	*) die "unknown command '$COMMAND'" ;;
+	help) usage; exit 0 ;;
+	"") usage_error "no command given" ;;
+	*) usage_error "unknown command '$COMMAND'" "$(suggest_command "$COMMAND")" ;;
 esac
 
 CARD_OVERRIDE=""
@@ -1028,12 +1113,12 @@ while [ $# -gt 0 ]; do
 	case $1 in
 	--allow-suspend) ALLOW_SUSPEND=yes ;;
 	--with-stream) WITH_STREAM=yes ;;
-	--disarm) [ $# -ge 2 ] || die "--disarm needs a list of wake source names"
+	--disarm) [ $# -ge 2 ] || usage_error "--disarm needs a list of wake source names"
 	          DISARM=$2; shift ;;
-	--card)   [ $# -ge 2 ] || die "--card needs a card number"
+	--card)   [ $# -ge 2 ] || usage_error "--card needs a card number"
 	          CARD_OVERRIDE=$2; shift
-	          case $CARD_OVERRIDE in ''|*[!0-9]*) die "--card needs a card number, got '$CARD_OVERRIDE'" ;; esac ;;
-	-*) die "unknown option '$1' (see --help)" ;;
+	          case $CARD_OVERRIDE in ''|*[!0-9]*) usage_error "--card needs a card number, got '$CARD_OVERRIDE'" ;; esac ;;
+	-*) usage_error "unknown option '$1'" ;;
 	*) break ;;
 	esac
 	shift
@@ -1048,7 +1133,7 @@ if [ "$COMMAND" = diff ]; then
 	cmd_diff "${1:-}" "${2:-}"
 	exit $?
 fi
-[ $# -eq 0 ] || die "unexpected argument '$1' for $COMMAND"
+[ $# -eq 0 ] || usage_error "unexpected argument '$1' for $COMMAND"
 
 RUNID=$(date -u +%Y%m%dT%H%M%SZ)-$$
 RUNDIR=$RUNS/$RUNID
@@ -1061,6 +1146,10 @@ if [ -n "${SUDO_USER:-}" ]; then
 fi
 
 trap on_exit EXIT INT TERM
+# on_exit restores the machine on every way out. Ctrl+C and SIGTERM say so and
+# end with 128+N (SIG-1, SIG-4); the exit then runs on_exit.
+trap 'printf "\n%s: cancelled; restoring the machine state\n" macbook91-runner >&2; exit 130' INT
+trap 'printf "\n%s: cancelled; restoring the machine state\n" macbook91-runner >&2; exit 143' TERM
 
 log "macbook91-runner $VERSION  command=$COMMAND  run=$RUNID"
 log "run directory: $RUNDIR"

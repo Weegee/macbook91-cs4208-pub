@@ -37,6 +37,7 @@ cannot be fooled by a screen blanking without a suspend.
     macbook91-wake-probe prw [DSDT]           map GPE numbers to wake devices
 """
 
+import difflib
 import json
 import os
 import subprocess
@@ -292,7 +293,7 @@ def cmd_prw(dsdt_path):
     try:
         aml = open(dsdt_path, 'rb').read()
     except PermissionError:
-        print('BLOCKED: %s needs root' % dsdt_path, file=sys.stderr)
+        print('%s: error: %s needs root' % (PROG, dsdt_path), file=sys.stderr)
         return 2
     prw = parse_prw(aml)
     rows = [l.split() for l in read('/proc/acpi/wakeup').splitlines()[1:] if l.strip()]
@@ -314,33 +315,118 @@ def cmd_prw(dsdt_path):
     return 0
 
 
+PROG = 'macbook91-wake-probe'
+DOCS_URL = 'https://github.com/Weegee/macbook91-cs4208-pub'
+COMMANDS = ('snapshot', 'diff', 'prw', 'cycle')
+
+# Abweichung von KAN-3: macbook91-runner reads the exit status of cycle, so 2
+# keeps meaning "could not measure" and 3 is the usage error.
+HELP = """\
+Usage: macbook91-wake-probe snapshot FILE
+       macbook91-wake-probe diff BEFORE AFTER
+       macbook91-wake-probe cycle OUTDIR
+       macbook91-wake-probe prw [DSDT]
+
+Find out what wakes the machine after it suspends: record the kernel's wake
+counters, suspend, wait for the resume, record again and report what moved.
+
+Examples:
+  macbook91-wake-probe cycle runs/wake-1
+  macbook91-wake-probe diff wake-before.json wake-after.json
+  sudo macbook91-wake-probe prw
+
+Commands:
+  snapshot  write the current wake counters to FILE as JSON
+  diff      report what moved between two snapshots
+  cycle     snapshot, suspend, wait for the resume, snapshot, diff
+  prw       map GPE numbers to wake devices (reading the DSDT needs root)
+
+Options:
+  -h, --help     show this help and exit
+  -V, --version  show the version and exit
+
+Exit status:
+  0  done
+  2  could not measure (no resume detected, DSDT unreadable)
+  3  usage error or unreadable input
+
+Docs and bug reports: %s
+""" % DOCS_URL
+
+
+def _version():
+    here = os.path.dirname(os.path.abspath(__file__))
+    try:
+        with open(os.path.join(here, '..', 'VERSION')) as f:
+            return f.read().strip()
+    except OSError:
+        return 'unknown'
+
+
+def fail(msg, hint=None):
+    print('%s: error: %s' % (PROG, msg), file=sys.stderr)
+    if hint:
+        print('Did you mean: %s %s' % (PROG, hint), file=sys.stderr)
+    print('Help: %s --help' % PROG, file=sys.stderr)
+    return 3
+
+
+def load(path):
+    try:
+        with open(path) as f:
+            return json.load(f)
+    except (OSError, ValueError) as e:
+        print('%s: error: cannot read %s: %s' % (PROG, path, e), file=sys.stderr)
+        return None
+
+
 def main():
-    if len(sys.argv) >= 3 and sys.argv[1] == 'snapshot':
-        json.dump(snapshot(), open(sys.argv[2], 'w'), indent=1, sort_keys=True)
-        print('snapshot -> %s' % sys.argv[2])
+    argv = sys.argv[1:]
+    if any(a in ('-h', '--help') for a in argv):
+        print(HELP, end='')
+        return 0
+    if any(a in ('-V', '--version') for a in argv):
+        print('%s (macbook91-cs4208-dkms) %s' % (PROG, _version()))
+        return 0
+    cmd = argv[0] if argv else ''
+    need = {'snapshot': 1, 'diff': 2, 'cycle': 1}
+    if cmd in need and len(argv) != need[cmd] + 1:
+        return fail('%s needs %s' % (cmd, {'snapshot': 'one output FILE',
+                                           'diff': 'BEFORE and AFTER',
+                                           'cycle': 'one OUTDIR'}[cmd])
+                    if len(argv) <= need[cmd] else 'unexpected argument: '
+                    + argv[need[cmd] + 1])
+    if cmd == 'prw' and len(argv) > 2:
+        return fail('unexpected argument: ' + argv[2])
+
+    if cmd == 'snapshot':
+        json.dump(snapshot(), open(argv[1], 'w'), indent=1, sort_keys=True)
+        print('snapshot -> %s' % argv[1])
         return 0
 
-    if len(sys.argv) >= 4 and sys.argv[1] == 'diff':
-        a = json.load(open(sys.argv[2]))
-        b = json.load(open(sys.argv[3]))
+    if cmd == 'diff':
+        a = load(argv[1])
+        b = load(argv[2])
+        if a is None or b is None:
+            return 3
         d, slept = diff(a, b)
         report(d, slept)
         for w in hook_warnings(a):
-            print('NOTE: %s' % w)
+            print('%s: note: %s' % (PROG, w), file=sys.stderr)
         return 0
 
-    if sys.argv[1:2] == ['prw']:
-        return cmd_prw(sys.argv[2] if len(sys.argv) > 2
+    if cmd == 'prw':
+        return cmd_prw(argv[1] if len(argv) > 1
                        else '/sys/firmware/acpi/tables/DSDT')
 
-    if len(sys.argv) >= 3 and sys.argv[1] == 'cycle':
-        out = sys.argv[2]
+    if cmd == 'cycle':
+        out = argv[1]
         os.makedirs(out, exist_ok=True)
         before = snapshot()
         json.dump(before, open(os.path.join(out, 'wake-before.json'), 'w'),
                   indent=1, sort_keys=True)
         for w in hook_warnings(before):
-            print('NOTE: %s' % w)
+            print('%s: note: %s' % (PROG, w), file=sys.stderr)
         print()
         print('armed wake sources:')
         for line in before['power']['acpi_wakeup'].splitlines()[1:]:
@@ -351,7 +437,8 @@ def main():
         sys.stdout.flush()
         subprocess.run(['systemctl', 'suspend'], check=False)
         if not wait_for_resume(before):
-            print('no resume detected within the timeout', file=sys.stderr)
+            print('%s: error: no resume detected within the timeout' % PROG,
+                  file=sys.stderr)
             return 2
         time.sleep(3)          # let the resume settle before reading counters
         after = snapshot()
@@ -360,11 +447,15 @@ def main():
         d, slept = diff(before, after)
         report(d, slept)
         for w in hook_warnings(after):
-            print('NOTE: %s' % w)
+            print('%s: note: %s' % (PROG, w), file=sys.stderr)
         return 0
 
-    print(__doc__)
-    return 3
+    if not cmd:
+        return fail('no command given')
+    if cmd.startswith('-'):
+        return fail('unknown option: ' + cmd)
+    near = difflib.get_close_matches(cmd, COMMANDS, n=1)
+    return fail('unknown command: ' + cmd, near[0] if near else None)
 
 
 if __name__ == '__main__':

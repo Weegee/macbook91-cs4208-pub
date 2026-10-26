@@ -17,19 +17,75 @@ executed. The key comes from zhangyoufu's comment on
 https://gist.github.com/MCJack123/943eaca762730ca4b7ae460b731b68e7
 (as credited in macrecovery.py).
 """
-import hashlib, re, struct, sys
+import hashlib, os, re, struct, sys
 
-src = open(sys.argv[3]).read()
+PROG = 'macbook91-verify-recovery-image'
+HELP = '''\
+Usage: macbook91-verify-recovery-image BaseSystem.dmg BaseSystem.chunklist MACRECOVERY
+
+Verify a recovery image against its Apple-signed chunklist: the RSA signature
+over the chunk table and the SHA-256 of every chunk. MACRECOVERY is the
+macrecovery.py file the public key is read from, as data.
+
+Examples:
+  macbook91-verify-recovery-image BaseSystem.dmg BaseSystem.chunklist macrecovery.py
+
+Options:
+  -h, --help     show this help and exit
+  -V, --version  show the version and exit
+
+Exit status:
+  0  the signature is valid and every chunk matches
+  1  the signature is invalid, a chunk differs or the files cannot be read
+  2  usage error
+''' + '\nDocs and bug reports: https://github.com/Weegee/macbook91-cs4208-pub\n'
+
+def cli(prog, help_text, minimum):
+    """-h/--help and -V/--version win anywhere; too few arguments exit 2."""
+    args = sys.argv[1:]
+    if any(a in ('-h', '--help') for a in args):
+        print(help_text, end='')
+        sys.exit(0)
+    if any(a in ('-V', '--version') for a in args):
+        here = os.path.dirname(os.path.abspath(__file__))
+        try:
+            with open(os.path.join(here, '..', 'VERSION')) as f:
+                ver = f.read().strip()
+        except OSError:
+            ver = 'unknown'
+        print('%s (macbook91-cs4208-dkms) %s' % (prog, ver))
+        sys.exit(0)
+    if len(args) < minimum:
+        print('%s: error: %s\nHelp: %s --help'
+              % (prog, 'no arguments given' if not args else 'too few arguments',
+                 prog), file=sys.stderr)
+        sys.exit(2)
+
+
+cli(PROG, HELP, 3)
+if len(sys.argv) > 4:
+    print('%s: error: unexpected argument: %s\nHelp: %s --help'
+          % (PROG, sys.argv[4], PROG), file=sys.stderr)
+    sys.exit(2)
+try:
+    src = open(sys.argv[3]).read()
+except OSError as e:
+    sys.exit('%s: error: cannot read %s: %s' % (PROG, sys.argv[3], e.strerror))
 KEY = int(re.search(r'Apple_EFI_ROM_public_key_1\s*=\s*(0x[0-9a-fA-F]+)', src).group(1), 16)
 
 HDR = struct.Struct('<4sIBBBxQQQ')
 CHUNK = struct.Struct('<I32s')
 
 dmg, clist = sys.argv[1], sys.argv[2]
-with open(clist, 'rb') as f:
+try:
+    f = open(clist, 'rb')
+except OSError as e:
+    sys.exit('%s: error: cannot read %s: %s' % (PROG, clist, e.strerror))
+with f:
     raw = f.read(HDR.size)
     magic, hsize, ver, cmethod, smethod, ccount, coff, soff = HDR.unpack(raw)
-    assert magic == b'CNKL' and hsize == HDR.size and ver == 1 and cmethod == 1, (magic, hsize, ver, cmethod)
+    if not (magic == b'CNKL' and hsize == HDR.size and ver == 1 and cmethod == 1):
+        sys.exit('%s: error: %s is not a supported chunklist: %r' % (PROG, clist, (magic, hsize, ver, cmethod)))
     ctx = hashlib.sha256(raw)
     chunks = []
     for _ in range(ccount):
@@ -38,7 +94,8 @@ with open(clist, 'rb') as f:
         chunks.append(CHUNK.unpack(d))
     digest = ctx.digest()
     sig = f.read(256)
-    assert smethod == 1 and len(sig) == 256, smethod
+    if not (smethod == 1 and len(sig) == 256):
+        sys.exit('%s: error: %s has an unsupported signature method: %r' % (PROG, clist, smethod))
     plaintext = int(f'0x1{"f"*404}003031300d060960864801650304020105000420{"0"*64}', 16) | int.from_bytes(digest, 'big')
     ok_sig = pow(int.from_bytes(sig, 'little'), 0x10001, KEY) == plaintext
 
@@ -48,7 +105,11 @@ if not ok_sig:
     sys.exit(1)
 
 bad = 0
-with open(dmg, 'rb') as f:
+try:
+    f = open(dmg, 'rb')
+except OSError as e:
+    sys.exit('%s: error: cannot read %s: %s' % (PROG, dmg, e.strerror))
+with f:
     for i, (size, want) in enumerate(chunks):
         got = hashlib.sha256(f.read(size)).digest()
         if got != want:

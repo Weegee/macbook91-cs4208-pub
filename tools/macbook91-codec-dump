@@ -27,13 +27,67 @@ specifically need this tool's plain diffable text output.
   sudo macbook91-codec-dump /tmp/codec-resumed.txt
   diff -u /tmp/codec-working.txt /tmp/codec-resumed.txt
 """
-import fcntl, struct, sys
+import fcntl, os, struct, sys
 
+PROG = 'macbook91-codec-dump'
 HWDEP = '/dev/snd/hwC0D0'
 IOCTL = 0xC0084811
 VENDOR_NID = 0x24
+HELP = '''\
+Usage: macbook91-codec-dump [FILE]
 
-fd = open(HWDEP, 'rb+', buffering=0)
+Dump every readable CS4208 register as sorted "nid register = value" lines.
+Without FILE the dump goes to standard output. Needs root. Prefer
+macbook91-codec-state for new work.
+
+Examples:
+  sudo macbook91-codec-dump /tmp/codec-working.txt
+  diff -u /tmp/codec-working.txt /tmp/codec-resumed.txt
+
+Options:
+  -h, --help     show this help and exit
+  -V, --version  show the version and exit
+
+Exit status:
+  0  done
+  1  the codec could not be read (no device, no permission)
+  2  usage error
+
+Docs and bug reports: https://github.com/Weegee/macbook91-cs4208-pub
+'''
+
+
+def cli_error(msg):
+    print('%s: error: %s\nHelp: %s --help' % (PROG, msg, PROG), file=sys.stderr)
+    sys.exit(2)
+
+
+if any(a in ('-h', '--help') for a in sys.argv[1:]):
+    print(HELP, end='')
+    sys.exit(0)
+if any(a in ('-V', '--version') for a in sys.argv[1:]):
+    try:
+        with open(os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                               '..', 'VERSION')) as f:
+            ver = f.read().strip()
+    except OSError:
+        ver = 'unknown'
+    print('%s (macbook91-cs4208-dkms) %s' % (PROG, ver))
+    sys.exit(0)
+if len(sys.argv) > 2:
+    cli_error('unexpected argument: ' + sys.argv[2])
+if len(sys.argv) == 2 and sys.argv[1].startswith('-'):
+    cli_error('unknown option: ' + sys.argv[1])
+
+try:
+    fd = open(HWDEP, 'rb+', buffering=0)
+except PermissionError:
+    print('%s: error: %s needs CAP_SYS_RAWIO, run as root' % (PROG, HWDEP),
+          file=sys.stderr)
+    sys.exit(1)
+except FileNotFoundError:
+    print('%s: error: no hwdep device %s' % (PROG, HWDEP), file=sys.stderr)
+    sys.exit(1)
 
 def verb(nid, v, p):
     try:

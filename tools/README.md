@@ -13,6 +13,22 @@ One place that says which tool to reach for.
 - **`macbook91-codec-state`** — capability-gated codec register capture/diff,
   used by `macbook91-runner` internally and usable standalone.
 
+## Command-line conventions
+
+Every tool here, and the scripts in `packaging/`, follows the house text HIG:
+`-h/--help` prints Usage first and a docs line last to stdout with exit 0,
+`-V/--version` prints `NAME VERSION` first, a wrong option or argument prints
+`NAME: error: ...` plus `Help: NAME --help` (and `Did you mean:` where one
+fits) to stderr and exits 2, results go to stdout and everything else to
+stderr. `tests/run-tests.sh` section 7f checks this for each tool. Python
+tools stay self-contained, one file each, because the tests load several of
+them by path; each carries its own small help block.
+
+Named deviations (`Abweichung von <ID>` in the code): the runner, codec-state,
+wake-probe and amp-transport use exit 2 for "could not measure" and 3 for
+usage and runtime errors, because `macbook91-runner` reads these codes
+(KAN-3); the verifier exits 0 when only listening checks were skipped (KAN-2).
+
 ## Superseded, kept as evidence
 
 These tools predate `macbook91-runner` and are retained because their header
