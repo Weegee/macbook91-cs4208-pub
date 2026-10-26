@@ -10,6 +10,46 @@
 set -uo pipefail
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+PROG=run-tests.sh
+
+usage() {
+	cat <<'USAGE'
+Usage: tests/run-tests.sh
+
+Run the hermetic regression tests: no root, no module load, no sound.
+Each check prints PASS, FAIL or BLOCKED; the last line gives the counts. A
+check that needs hardware or a missing file is BLOCKED and never counted as
+passed.
+
+Examples:
+  bash tests/run-tests.sh
+  bash tests/run-tests.sh | tail -n 3
+
+Options:
+  -h, --help     show this help and exit
+  -V, --version  show the version and exit
+
+Exit status:
+  0  no check failed (BLOCKED checks do not fail the run)
+  1  at least one check failed
+  2  usage error
+
+Docs and bug reports: https://github.com/Weegee/macbook91-cs4208-pub
+USAGE
+}
+
+for arg in "$@"; do
+	case "$arg" in
+		-h|--help) usage; exit 0 ;;
+		-V|--version)
+			printf '%s (macbook91-cs4208-dkms) %s\n' "$PROG" \
+				"$(head -n1 "$ROOT"/VERSION 2>/dev/null || echo unknown)"
+			exit 0 ;;
+		-*) printf '%s: error: unknown option: %s\nHelp: %s --help\n' "$PROG" "$arg" "$PROG" >&2; exit 2 ;;
+		*) printf '%s: error: unexpected argument: %s\nHelp: %s --help\n' "$PROG" "$arg" "$PROG" >&2; exit 2 ;;
+	esac
+done
+
 SRC="$ROOT/src/cs420x-a1534"
 PKG="$ROOT/packaging"
 # Since 20261020.03 one tree carries a derived cs420x.c per kernel series
@@ -2903,6 +2943,118 @@ else
 	check_afg_census "setup_a1534()"      "$SETUP_START" "$PLAY_START" 46 46
 	check_afg_census "play_a1534()"       "$PLAY_START" "$((FILE_END + 1))" 0 1
 fi
+
+echo "== 7f. Text interfaces (house HIG) =="
+# Every tool a person starts from a terminal answers --help with a Usage: first
+# line and a "Docs and bug reports:" last line on standard output and exit 0,
+# --version with "NAME ..." and exit 0, and an unknown option with a short
+# message "NAME: error: ..." plus "Help: NAME --help" on standard error, an
+# empty standard output and the documented usage exit status. Nothing here
+# needs root, hardware or the network: all of it ends before any work starts.
+HIGT=$(mktemp -d)
+hig_tool() { # hig_tool NAME USAGE_STATUS CMD... : --help, --version and an unknown option
+	local name=$1 urc=$2 out rc
+	shift 2
+	out=$("$@" --help 2>"$HIGT/e"); rc=$?
+	if [ "$rc" -eq 0 ] && [ ! -s "$HIGT/e" ] && [[ $(head -n1 <<<"$out") == Usage:* ]] \
+	   && [[ $(tail -n1 <<<"$out") == "Docs and bug reports:"* ]]; then
+		ok "$name --help: Usage first, docs last, standard output, exit 0"
+	else
+		no "$name --help: Usage first, docs last, standard output, exit 0" \
+		   "exit $rc, stderr '$(head -c 80 "$HIGT/e")', first line '$(head -n1 <<<"$out")'"
+	fi
+	out=$("$@" --version 2>"$HIGT/e"); rc=$?
+	if [ "$rc" -eq 0 ] && [ ! -s "$HIGT/e" ] && [[ $(head -n1 <<<"$out") == "$name "* ]]; then
+		ok "$name --version: first line starts with the name, exit 0"
+	else
+		no "$name --version: first line starts with the name, exit 0" \
+		   "exit $rc, stderr '$(head -c 80 "$HIGT/e")', first line '$(head -n1 <<<"$out")'"
+	fi
+	out=$("$@" --no-such-option 2>"$HIGT/e" </dev/null); rc=$?
+	if [ "$rc" -eq "$urc" ] && [ -z "$out" ] && grep -q "^$name: error: " "$HIGT/e" \
+	   && grep -qx "Help: $name --help" "$HIGT/e"; then
+		ok "$name unknown option: error and Help line on standard error, exit $urc"
+	else
+		no "$name unknown option: error and Help line on standard error, exit $urc" \
+		   "exit $rc, stdout '$(head -c 60 <<<"$out")', stderr '$(head -c 120 "$HIGT/e")'"
+	fi
+}
+hig_tool macbook91-audio-verify 2 "$TOOLS/macbook91-audio-verify"
+hig_tool kernel-series 2 "$SRC/contrib/pacman/kernel-series"
+hig_tool macbook91-runner 3 "$TOOLS/macbook91-runner"
+hig_tool dev-audio-collect.sh 2 "$TOOLS/dev-audio-collect.sh"
+hig_tool macbook91-codec-state 3 "$TOOLS/macbook91-codec-state"
+hig_tool macbook91-wake-probe 3 "$TOOLS/macbook91-wake-probe"
+hig_tool macbook91-amp-transport 2 "$TOOLS/macbook91-amp-transport"
+hig_tool macbook91-codec-dump 2 "$TOOLS/macbook91-codec-dump"
+hig_tool macbook91-fetch-macos-recovery 2 "$TOOLS/macbook91-fetch-macos-recovery"
+hig_tool macbook91-verify-recovery-image 2 "$TOOLS/macbook91-verify-recovery-image"
+hig_tool macbook91-kc-disasm 2 "$TOOLS/macbook91-kc-disasm"
+hig_tool macbook91-kc-symbols 2 "$TOOLS/macbook91-kc-symbols"
+hig_tool fetch-upstream.sh 2 "$PKG/fetch-upstream.sh"
+hig_tool promote-release.sh 2 "$PKG/promote-release.sh"
+hig_tool mkdist.py 2 python3 "$PKG/mkdist.py"
+hig_tool run-tests.sh 2 bash "$ROOT/tests/run-tests.sh"
+
+# The wrapper hands every other argument to makepkg, so only --help is tried.
+if out=$("$PKG/make-package.sh" --help 2>/dev/null) && [[ $(head -n1 <<<"$out") == Usage:* ]]; then
+	ok "make-package.sh --help prints its usage without starting a build"
+else
+	no "make-package.sh --help prints its usage without starting a build" "$(head -n1 <<<"$out")"
+fi
+
+# -h/--help wins wherever it stands, even after an unknown option.
+if out=$("$TOOLS/macbook91-audio-verify" --bogus --help 2>&1) && [[ $(head -n1 <<<"$out") == Usage:* ]]; then
+	ok "the verifier shows its help even after an unknown option"
+else
+	no "the verifier shows its help even after an unknown option" "$(head -n1 <<<"$out")"
+fi
+
+# A mistyped option gets the nearest real one, and a mistyped command too.
+err=$("$TOOLS/macbook91-audio-verify" --nosound 2>&1 >/dev/null </dev/null)
+if grep -qx 'Did you mean: macbook91-audio-verify --no-sound' <<<"$err"; then
+	ok "the verifier suggests --no-sound for --nosound"
+else
+	no "the verifier suggests --no-sound for --nosound" "$err"
+fi
+err=$("$RUNNER" probes 2>&1 >/dev/null </dev/null)
+if grep -qx 'Did you mean: macbook91-runner probe' <<<"$err"; then
+	ok "the runner suggests probe for probes"
+else
+	no "the runner suggests probe for probes" "$err"
+fi
+
+# Colour: none on a pipe, on request with --color=always, and the flag outranks
+# NO_COLOR, as the colour order of the house HIG says.
+esc=$'\033'
+plain=$("$TOOLS/macbook91-audio-verify" --no-sound </dev/null 2>&1)
+forced=$(NO_COLOR=1 "$TOOLS/macbook91-audio-verify" --no-sound --color=always </dev/null 2>&1)
+never=$(MACBOOK91_AUDIO_VERIFY_COLOR=never "$TOOLS/macbook91-audio-verify" --no-sound --color=never </dev/null 2>&1)
+if [[ $plain != *"$esc"* ]] && [[ $never != *"$esc"* ]] && [[ $forced == *"${esc}["* ]]; then
+	ok "verifier colour: none on a pipe, --color=always wins over NO_COLOR"
+else
+	no "verifier colour: none on a pipe, --color=always wins over NO_COLOR" \
+	   "plain has escape: $([[ $plain == *"$esc"* ]] && echo yes || echo no); forced has escape: $([[ $forced == *"${esc}["* ]] && echo yes || echo no)"
+fi
+
+# An unreadable input is a message, not a traceback.
+for tool in macbook91-codec-state macbook91-wake-probe; do
+	err=$("$TOOLS/$tool" diff "$HIGT/none-a" "$HIGT/none-b" 2>&1 >/dev/null)
+	if grep -q "^$tool: error: cannot read " <<<"$err" && ! grep -q Traceback <<<"$err"; then
+		ok "$tool diff names the file it cannot read, with no traceback"
+	else
+		no "$tool diff names the file it cannot read, with no traceback" "$(head -c 200 <<<"$err")"
+	fi
+done
+
+# The fetcher's lockfile tags are machine output and stay one tag per line.
+if tags=$("$PKG/fetch-upstream.sh" --all --print-tag 2>/dev/null) && [ -n "$tags" ] \
+   && ! grep -qvE '^v[0-9]+\.[0-9]+(\.[0-9]+)?$' <<<"$tags"; then
+	ok "fetch-upstream.sh --print-tag still prints plain tags only"
+else
+	no "fetch-upstream.sh --print-tag still prints plain tags only" "$tags"
+fi
+rm -rf "$HIGT"
 
 echo "== 8. Hardware-only gates =="
 for g in "A1534 fixup actually selected at probe" \
