@@ -1,0 +1,57 @@
+macbook91-cs4208-dkms 20261026.01-1 - RELEASE (tagged v20261026.01; Linux 7.3 supported, the LTS kernel is the default; driver behaviour changes verified at source and build level only, hardware NOT RUN, released by the maintainer's decision without the hardware gate)
+
+What changed: the full list is in docs/CHANGELOG.md.
+- Series 7.3 (tag v7.3, for the CachyOS kernel 7.3.0-4) is supported next to 6.18 (LTS) and 7.2.
+  Linux 7.3 added two quirk rows for PCI subsystem 8086:7270 ("MacBookAir 7,2"), which the
+  target machine carries. They select CS4208_MBA6, whose pin table marks the speaker pin
+  unconnected. On a match the patched probe now sets the fixup to CS4208_GPIO0 before the
+  quirk tables are consulted, on every series (local-changes.patch, docs/ROOT-CAUSE.md).
+- Headphone jack: after the bring-up replay both converters' cached stream setup is dropped
+  and a running stream is routed to the converter of the current jack state; a failed
+  jack-callback registration is logged.
+- One series list (kheaders/KERNEL-SERIES) drives dkms.conf's BUILD_EXCLUSIVE_KERNEL, a new
+  pacman hook that warns about installed kernels of an unsupported series, and the verifier's
+  "kernel series supported" check. A1534_ALLOW_SERIES_MISMATCH is removed.
+- The package depends on linux-cachyos-lts-headers; linux-cachyos-headers is the one optional
+  kernel. The card profile makes analog-stereo an output too, so a kernel that runs the stock
+  codec offers a stereo sink (NOT RUN on hardware).
+- Verifier, recovery archive, collector and tests: see docs/CHANGELOG.md.
+- Source identity of the module: 6.18 c7580fd70025fa36 (was 2fc8b8ad2d1b2deb), 7.2
+  c6661a7c92c95904 (was 3459bbf7be37223c), 7.3 6a7014b2db87a081.
+
+Hardware: NOT RUN for 20261026.01. The maintainer decided on 2026-10-26 to release without the
+hardware gate of docs/RELEASING.md section 4 and to treat it as a pointer for later. Open, not
+verified: install of this package (pacman -U), the DKMS build on the target machine for the
+LTS kernel and for 7.3.0-4-cachyos, macbook91-audio-verify on both kernels (speaker,
+microphone, headphone hotplug with a running stream, deep suspend, the new checks "kernel
+series supported" and "no mainline pin overrides"), a boot with headphones plugged in, and the
+stock-codec stereo sink on 7.3 with the module removed. The fixup pin and the jack re-route
+are therefore verified at source and build level only. Earlier hardware results (6.18 and 7.2
+on 20261020.03 and 20261020.01) do not cover the changed code.
+
+Gates on the committed tree, run on 2026-10-26 under the 6.18.55-2-cachyos-lts kernel
+(VERIFIED, each ran):
+- tests/run-tests.sh with the package built from this tree, on a host with the replacement
+  module loaded: 272 passed, 0 failed, 9 blocked (the hardware checks it cannot run stay
+  BLOCKED).
+- The module builds for 6.18.55-2-cachyos-lts, 7.2.11-1-cachyos and 7.3.0-4-cachyos with rc 0
+  and no compiler diagnostic; the source identities are the ones above. The six fetched v7.3
+  files are byte-identical to the CachyOS kernel tree at tag cachyos-7.3.0-4 (srcversion of
+  vanilla v7.3 equals the in-tree CachyOS module).
+- make dist gives the tarball the PKGBUILD pins (sha256
+  a841a3dca1a75665b1e56b5127cb1eabd7cac622627c192d68f0c6e540ab5430); makepkg
+  --printsrcinfo equals .SRCINFO and --verifysource passes.
+- namcap on the package: 0 errors, 5 warnings explained in docs/NAMCAP.md; namcap on the
+  PKGBUILD: no output.
+- The promotion gate (the maintainer's extra test scripts and the scan for identifiers that
+  must not be published, over the files a commit carries) passed: 0 hits.
+
+Release assets: the files listed in SHA256SUMS and SHA256SUMS itself, which
+are the text files of this directory and the source tarball. No built package
+is part of this release.
+
+Maintainer's local build of the package, for reference only. It is not
+published. The package records the build date and the build environment, so a
+package you build yourself will not have this checksum; the reproducible
+artifact is the source tarball in SHA256SUMS.
+1140c34caa110636992b3e5760a83e99ac315fc089ef933e75ce89101340038b  macbook91-cs4208-dkms-20261026.01-1-x86_64.pkg.tar.zst

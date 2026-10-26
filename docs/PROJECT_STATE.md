@@ -1,15 +1,16 @@
 # Project state
 
-Version 20261026.01 - updated 2026-10-26, adding the candidate 20261026.01 (next paragraph) to the 2026-10-21 state below.
+Version 20261026.01 - updated 2026-10-26, adding the release 20261026.01 (next paragraph) to the 2026-10-21 state below.
 
-**20261026.01 is a candidate: built and gated in software, not promoted (2026-10-26).** Kernel series 7.3 (tag v7.3, for
+**20261026.01 is promoted and released (`release/20261026.01/`, tag `v20261026.01` on the promote commit, 2026-10-26), built and gated in software; the hardware gate was not run.** Kernel series 7.3 (tag v7.3, for
 7.3.0-4-cachyos) is supported next to 6.18 (LTS) and 7.2. On a match the patched probe sets the A1534 fixup to
 CS4208_GPIO0 before the quirk tables are consulted, because Linux 7.3 added PCI-SSID rows for 8086:7270 that select
 CS4208_MBA6 (`docs/ROOT-CAUSE.md`). `kheaders/KERNEL-SERIES` is the one series list: dkms.conf, a pacman hook that
 warns about installed kernels of other series, and `macbook91-audio-verify` read it. The package depends on
 `linux-cachyos-lts-headers`; the LTS kernel is the default. Software gates: `regress.suite` and `build.series_7_3` in
-`docs/test-status.json`. Hardware: NOT RUN for 20261026.01 (`hw.runtime_20261026_01`); the gate is `docs/RELEASING.md` section 4,
-on the LTS kernel and on 7.3. The current promoted package stays 20261021.01 until then.
+`docs/test-status.json`. Hardware: NOT RUN for 20261026.01 (`hw.runtime_20261026_01`). The maintainer decided on 2026-10-26 to release without the
+gate of `docs/RELEASING.md` section 4 and to keep it as a pointer: install, one `macbook91-audio-verify` run on the LTS kernel and
+on 7.3, jack hotplug, suspend. The fixup pin and the jack re-route are verified at source and build level only.
 
 **History note.** 20261021.01 is the first public release. Everything below that names an earlier version (tags, GitHub releases,
 release assets, installs, package checksums, `release/` directories) describes the earlier, private development line of this
@@ -167,7 +168,12 @@ Read only; no verifier run, no sound.
 
 ## Deliverable
 
-**Current promoted package:** `macbook91-cs4208-dkms 20261021.01-1` (`release/20261021.01/`)
+**Current promoted package:** `macbook91-cs4208-dkms 20261026.01-1` (`release/20261026.01/`)
+- **RELEASED** (tag `v20261026.01`, published 2026-10-26): kernel series 7.3, the A1534 fixup pinned before the quirk tables,
+the LTS kernel as the default; hardware NOT RUN (released without the gate by the maintainer's decision). See
+`release/20261026.01/STATUS.txt`.
+
+Previous release: `macbook91-cs4208-dkms 20261021.01-1` (`release/20261021.01/`)
 - **RELEASED** (tag `v20261021.01`, published 2026-10-21): the first public release, comments, attribution, licence headers and non-code files only, no driver change;
 hardware NOT RUN, carried over from 20261020.03 and 20261020.01. See `release/20261021.01/STATUS.txt`.
 
@@ -228,9 +234,10 @@ line is present like all the others.
 
 ## Exact next action
 
-**20261026.01: the hardware gate** (`docs/RELEASING.md` section 4) on the LTS kernel and on 7.3.0-4-cachyos, then
-promotion (section 5). If the gate fails, 20261021.01 stays the promoted package, and booting the LTS kernel keeps
-audio working.
+**20261026.01 is promoted, tagged and published** (`docs/RELEASING.md` sections 5 and 6), without the hardware gate. Next, at the
+maintainer's pace: install it, boot the LTS kernel and 7.3.0-4-cachyos, run `macbook91-audio-verify` on each and record the result in
+`docs/test-status.json` (`hw.runtime_20261026_01`, `pkg.install_20261026_01`). If a run fails, booting the LTS kernel keeps audio
+working.
 
 **20261021.01 is promoted, tagged and published** (`docs/RELEASING.md` sections 5 and 6). Hardware: NOT RUN for 20261021.01. If the maintainer installs it, the check is
 one `macbook91-audio-verify` run per kernel in use, recorded in `docs/test-status.json` (`hw.runtime_20261021_01_carried_over` then

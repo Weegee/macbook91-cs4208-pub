@@ -1,0 +1,95 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+# Maintainer: Weegee <748975+Weegee@users.noreply.github.com>
+#
+# DKMS driver restoring internal-speaker audio on the Apple MacBook9,1 (A1534).
+# See docs/ROOT-CAUSE.md in the project for why an out-of-tree module is needed
+# rather than a mainline fixup.
+
+# The -dkms suffix is the Arch convention for a package that ships module
+# sources for DKMS to build. _pkgname is the same convention's companion: it
+# names the runtime identity, which deliberately did NOT move with the package
+# name. See "Renamed" below.
+pkgname=macbook91-cs4208-dkms
+_pkgname="${pkgname%-dkms}"
+pkgver=20261026.01
+pkgrel=1
+pkgdesc="CS4208 codec driver restoring internal speakers on Apple MacBook9,1 (A1534)"
+arch=('x86_64')
+# This project's own home. The driver's approach comes from
+# https://github.com/leifliddy/macbook12-audio-driver; that provenance is
+# recorded with commit and checksum in src/cs420x-a1534/vendored/PROVENANCE.md,
+# not in the field that tells a user where to report a bug.
+url='https://github.com/Weegee/macbook91-cs4208-pub'
+# Every license of what the package installs; README.md's "Provenance and
+# licensing" maps them to paths. GPL-2.0-only is the conservative reading of
+# the vendored A1534 trace's assumed GPL-2.0 (vendored/PROVENANCE.md),
+# LGPL-2.1-or-later that of the ACP profiles derived from alsa-card-profile.
+license=('GPL-2.0-only' 'GPL-2.0-or-later' 'GPL-3.0-or-later' 'LGPL-2.1-or-later')
+install="$_pkgname.install"
+
+# Renamed: the package was called macbook91-cs4208 in early versions. Only the
+# pacman package name moved.
+# The DKMS module is still macbook91-cs4208, /usr/src/macbook91-cs4208-$pkgver
+# is still the source directory, and /usr/share/macbook91-cs4208/acp/ still
+# holds the profile set - the shipped WirePlumber rule names that path
+# absolutely, so moving it would have broken every existing installation's
+# audio on upgrade for the sake of a directory name.
+provides=("$_pkgname=$pkgver")
+conflicts=("$_pkgname")
+replaces=("$_pkgname")
+
+# dkms pulls in the build tooling it needs at install time. The compiler is
+# the one the target kernel's own .config names: the CachyOS LTS kernel is
+# built with GCC, which dkms depends on, and linux-cachyos-headers, the
+# headers of the clang-built current kernel, depends on clang, lld and llvm
+# itself. The Makefile's check target names a compiler that is still missing.
+#
+# linux-cachyos-lts-headers is the kernel this package is for by default: the
+# LTS series is always supported, DKMS builds only for a kernel whose headers
+# are installed, and the headers package depends on linux-cachyos-lts. The
+# current CachyOS series is supported as well, through the optional
+# dependency below. A kernel of any other series gets no module, and the
+# package's pacman hook warns about it after the transaction.
+#
+# wireplumber stays a hard requirement. It is not a convenience: without the
+# shipped software-volume configuration this card has no working volume
+# control on the internal speakers at all.
+depends=('dkms' 'wireplumber' 'linux-cachyos-lts-headers')
+optdepends=('linux-cachyos-headers: build the module for the current CachyOS kernel as well'
+            'alsa-utils: required by macbook91-audio-verify for playback and capture checks'
+            'sox: lets macbook91-audio-verify measure microphone level automatically')
+
+# make, for package(), is the only tool makepkg needs; the module itself is built
+# by DKMS on the target machine, with its own dependencies above.
+makedepends=('make')
+
+# One source: the reproducible tarball `make dist` writes to dist/. makepkg
+# downloads nothing, and every DKMS rebuild after installation touches no
+# network either.
+#
+# Where the tree in it comes from: the kernel half -
+# cs420x.c and the private HDA headers - is not carried in the project's
+# repository: `make dist` first runs packaging/fetch-upstream.sh at the newest
+# kernel tag of each series recorded in packaging/upstream.lock, which
+# fetches exactly six files per series from git.kernel.org and checks every
+# one against that lockfile before it is allowed into the tree. The A1534
+# bring-up sequence is still carried in the repository and is still never
+# fetched from anywhere.
+#
+# packaging/mkdist.py writes the same bytes from the same inputs, so the
+# checksum is pinned here at release time and `make arch-pkg` refuses a
+# tarball that does not match it. The tarball holds no PKGBUILD, which is what
+# lets the pin live in this file. The provenance gate is still
+# packaging/upstream.lock; UPSTREAM.sha256 and vendored/PROVENANCE.sha256 travel
+# inside the package and are enforced by the Makefile's `check` target, and
+# what they establish is integrity of the installed copy, not origin.
+source=("$pkgname-$pkgver.tar")
+sha256sums=('a841a3dca1a75665b1e56b5127cb1eabd7cac622627c192d68f0c6e540ab5430')
+
+# The installation itself is the root Makefile's `install` target, so the
+# same file list is used by this package and by anyone installing from the
+# tarball by hand.
+package() {
+    cd "$pkgname-$pkgver" || exit 1
+    make PREFIX=/usr DESTDIR="$pkgdir" install
+}
