@@ -138,7 +138,7 @@ exactly why headphones always survived a resume.
 ```
 src/cs420x-a1534/   the module: mainline cs420x.c plus a gated A1534 path
 tools/              measurement tools, one entry point: macbook91-runner
-tests/              272 hermetic tests, no root, no hardware, no sound
+tests/              328 hermetic tests, no root, no hardware, no sound
 packaging/          the fetcher, its lockfile, the tarball and release scripts
 packaging/arch/     PKGBUILD, .SRCINFO and the install scriptlet
 Makefile, VERSION   dist, install and package targets; the version

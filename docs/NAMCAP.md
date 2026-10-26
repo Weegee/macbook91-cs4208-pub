@@ -1,9 +1,9 @@
 # namcap results for `macbook91-cs4208-dkms`
 
-Measured 2026-10-26 on `macbook91-cs4208-dkms` 20261026.01-1, built from this
+Measured 2026-10-26 on `macbook91-cs4208-dkms` 20261026.02-1, built from this
 tree with `make arch-pkg`:
 
-    namcap dist/macbook91-cs4208-dkms-20261026.01-1-x86_64.pkg.tar.zst
+    namcap dist/macbook91-cs4208-dkms-20261026.02-1-x86_64.pkg.tar.zst
     namcap packaging/arch/PKGBUILD
 
 The PKGBUILD check prints nothing. The package check reports **0 errors** and

@@ -1,6 +1,6 @@
 # Project state
 
-Version 20261026.01 - updated 2026-10-26, adding the release 20261026.01 (next paragraph) to the 2026-10-21 state below.
+Version 20261026.02 - updated 2026-10-26, adding the prepared release 20261026.02 (first paragraph) to the state of 20261026.01 below.
 
 **20261026.01 is promoted and released (`release/20261026.01/`, tag `v20261026.01` on the promote commit, 2026-10-26), built and gated in software; the hardware gate was not run.** Kernel series 7.3 (tag v7.3, for
 7.3.0-4-cachyos) is supported next to 6.18 (LTS) and 7.2. On a match the patched probe sets the A1534 fixup to
@@ -12,11 +12,7 @@ warns about installed kernels of other series, and `macbook91-audio-verify` read
 gate of `docs/RELEASING.md` section 4 and to keep it as a pointer: install, one `macbook91-audio-verify` run on the LTS kernel and
 on 7.3, jack hotplug, suspend. The fixup pin and the jack re-route are verified at source and build level only.
 
-**Unreleased since 20261026.01 (2026-10-26): packaging only.** The PKGBUILD sets `depends` in `package()` instead of at the top,
-so that makepkg also builds the package on a host without the CachyOS repositories, such as a plain Arch container: makepkg checks
-top-level depends before it builds and cannot install `linux-cachyos-lts-headers` there. The built package carries the same three
-dependencies and the same files as the 20261026.01 build (compared); the source tarball, the driver and the verifier are unchanged,
-and `release/20261026.01/` is untouched. The suite reads the dependency from `.SRCINFO` now (`regress.suite`).
+**20261026.02 is prepared, not promoted (2026-10-26): the text interfaces follow the house text HIG.** The release commit is `463d4f7` (`VERSION`, pinned tarball, `.SRCINFO`, `docs/CHANGELOG.md`); `make arch-pkg` built `dist/macbook91-cs4208-dkms-20261026.02-1-x86_64.pkg.tar.zst`, `tests/run-tests.sh` and `namcap` ran on the committed tree (`regress.suite`, `docs/NAMCAP.md`). The module is unchanged. What changed is the text and the options of `macbook91-audio-verify` (`--help`, `--version`, `-y`, `--no-input`, `--color`, `--no-color`, cancelled exit 130 and 143), of the pacman hook and its `kernel-series` helper, of the install scriptlet, and of the development and release tools; the PKGBUILD sets `depends` in `package()` (so that makepkg also builds on a host without the CachyOS repositories), as it did since 8d90422. Named deviations are in the code and in `tools/README.md`. Hardware: NOT RUN (`hw.runtime_20261026_02`). It is not promoted: release step 4 of `docs/RELEASING.md` (install, reboot, one `macbook91-audio-verify` run with the listening checks) and the maintainer's authorization for steps 5 and 6 are open.
 
 **History note.** 20261021.01 is the first public release. Everything below that names an earlier version (tags, GitHub releases,
 release assets, installs, package checksums, `release/` directories) describes the earlier, private development line of this
@@ -240,7 +236,12 @@ line is present like all the others.
 
 ## Exact next action
 
-**20261026.01 is promoted, tagged and published** (`docs/RELEASING.md` sections 5 and 6), without the hardware gate. Next, at the
+**20261026.02 is prepared** (release commit `463d4f7`, package built, software gates passed, no `release/20261026.02/` yet). Next: install
+`dist/macbook91-cs4208-dkms-20261026.02-1-x86_64.pkg.tar.zst`, reboot, run `macbook91-audio-verify` with the listening checks and record the
+result in `docs/test-status.json` (`hw.runtime_20261026_02`), or decide to release without the gate as for 20261026.01; then
+`packaging/promote-release.sh`, `STATUS.txt`, `--seal`, the promote commit, tag, release and the package repository check.
+
+**20261026.01 is promoted, tagged and published** (`docs/RELEASING.md` sections 5 and 6), without the hardware gate. At the
 maintainer's pace: install it, boot the LTS kernel and 7.3.0-4-cachyos, run `macbook91-audio-verify` on each and record the result in
 `docs/test-status.json` (`hw.runtime_20261026_01`, `pkg.install_20261026_01`). If a run fails, booting the LTS kernel keeps audio
 working.
