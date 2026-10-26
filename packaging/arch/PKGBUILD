@@ -54,13 +54,18 @@ replaces=("$_pkgname")
 # wireplumber stays a hard requirement. It is not a convenience: without the
 # shipped software-volume configuration this card has no working volume
 # control on the internal speakers at all.
-depends=('dkms' 'wireplumber' 'linux-cachyos-lts-headers')
+#
+# The depends array itself is set in package(), not up here. makepkg checks
+# top-level depends before it builds, so a build host without the CachyOS
+# repositories, such as a plain Arch container, would have to install
+# linux-cachyos-lts-headers and cannot. Depends set in package() are not
+# checked at build time, and the built package carries them all the same.
 optdepends=('linux-cachyos-headers: build the module for the current CachyOS kernel as well'
             'alsa-utils: required by macbook91-audio-verify for playback and capture checks'
             'sox: lets macbook91-audio-verify measure microphone level automatically')
 
 # make, for package(), is the only tool makepkg needs; the module itself is built
-# by DKMS on the target machine, with its own dependencies above.
+# by DKMS on the target machine, with the dependencies package() declares.
 makedepends=('make')
 
 # One source: the reproducible tarball `make dist` writes to dist/. makepkg
@@ -90,6 +95,7 @@ sha256sums=('a841a3dca1a75665b1e56b5127cb1eabd7cac622627c192d68f0c6e540ab5430')
 # same file list is used by this package and by anyone installing from the
 # tarball by hand.
 package() {
+    depends=('dkms' 'wireplumber' 'linux-cachyos-lts-headers')
     cd "$pkgname-$pkgver" || exit 1
     make PREFIX=/usr DESTDIR="$pkgdir" install
 }

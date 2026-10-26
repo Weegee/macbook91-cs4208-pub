@@ -12,6 +12,12 @@ warns about installed kernels of other series, and `macbook91-audio-verify` read
 gate of `docs/RELEASING.md` section 4 and to keep it as a pointer: install, one `macbook91-audio-verify` run on the LTS kernel and
 on 7.3, jack hotplug, suspend. The fixup pin and the jack re-route are verified at source and build level only.
 
+**Unreleased since 20261026.01 (2026-10-26): packaging only.** The PKGBUILD sets `depends` in `package()` instead of at the top,
+so that makepkg also builds the package on a host without the CachyOS repositories, such as a plain Arch container: makepkg checks
+top-level depends before it builds and cannot install `linux-cachyos-lts-headers` there. The built package carries the same three
+dependencies and the same files as the 20261026.01 build (compared); the source tarball, the driver and the verifier are unchanged,
+and `release/20261026.01/` is untouched. The suite reads the dependency from `.SRCINFO` now (`regress.suite`).
+
 **History note.** 20261021.01 is the first public release. Everything below that names an earlier version (tags, GitHub releases,
 release assets, installs, package checksums, `release/` directories) describes the earlier, private development line of this
 project. Those tags, release pages and packages are not part of this repository and cannot be followed from here; the text is kept

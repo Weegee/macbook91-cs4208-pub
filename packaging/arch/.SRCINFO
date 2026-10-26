@@ -10,9 +10,6 @@ pkgbase = macbook91-cs4208-dkms
 	license = GPL-3.0-or-later
 	license = LGPL-2.1-or-later
 	makedepends = make
-	depends = dkms
-	depends = wireplumber
-	depends = linux-cachyos-lts-headers
 	optdepends = linux-cachyos-headers: build the module for the current CachyOS kernel as well
 	optdepends = alsa-utils: required by macbook91-audio-verify for playback and capture checks
 	optdepends = sox: lets macbook91-audio-verify measure microphone level automatically
@@ -23,3 +20,6 @@ pkgbase = macbook91-cs4208-dkms
 	sha256sums = a841a3dca1a75665b1e56b5127cb1eabd7cac622627c192d68f0c6e540ab5430
 
 pkgname = macbook91-cs4208-dkms
+	depends = dkms
+	depends = wireplumber
+	depends = linux-cachyos-lts-headers

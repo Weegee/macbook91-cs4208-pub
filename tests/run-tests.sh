@@ -1392,13 +1392,20 @@ fi
 # The LTS headers are the package's one kernel dependency; kernels of other
 # distributions and the clang toolchain are not named at all (the headers of
 # the clang-built CachyOS kernel depend on clang, lld and llvm themselves).
-if grep -q "^depends=(.*'linux-cachyos-lts-headers'" "$ARCHPKG/PKGBUILD" \
+# The depends array is set in package(), not at the top: makepkg checks
+# top-level depends before it builds, and a host without the CachyOS
+# repositories cannot install the LTS headers. .SRCINFO, which the check
+# below keeps current, is what makepkg reads: no depends in the pkgbase
+# section, the LTS headers in the package's own.
+ARCH_SRCINFO="$ARCHPKG/.SRCINFO"
+if awk '/^pkgname = /{p=1} !p && /^\tdepends = /{bad=1} END{exit bad}' "$ARCH_SRCINFO" \
+   && awk '/^pkgname = /{p=1} p && $0 == "\tdepends = linux-cachyos-lts-headers"{f=1} END{exit !f}' "$ARCH_SRCINFO" \
    && ! grep -qE "'(linux-headers|linux-lts-headers|clang|lld|llvm)[:']" "$ARCHPKG/PKGBUILD" \
    && ! grep -q '_toolchain_note' "$ARCHPKG/macbook91-cs4208.install"; then
 	ok "the package depends on the LTS headers and names no kernel it does not support"
 else
 	no "the package depends on the LTS headers and names no kernel it does not support" \
-	   "$(grep -nE '^(depends|optdepends)=' "$ARCHPKG/PKGBUILD")"
+	   "$(grep -n 'depends = ' "$ARCH_SRCINFO")"
 fi
 
 if command -v makepkg >/dev/null; then
