@@ -292,7 +292,7 @@
     {
       "id": "regress.suite",
       "status": "PASS",
-      "note": "tests/run-tests.sh: 272 passed, 0 failed, 9 blocked (measured 2026-10-26 on the committed tree of the release with the package that make arch-pkg built for 20261026.01, run under the 6.18.55-2-cachyos-lts kernel on a host with the replacement module loaded; hermetic, no hardware; the hardware checks it cannot run stay BLOCKED). A host that runs the stock codec runs one more test and blocks the two checks that compare these records: 271 passed, 0 failed, 10 blocked (derived from the run above: the stock-codec test runs and passes, the two checks that compare these records are BLOCKED; NOT RUN on such a host)"
+      "note": "tests/run-tests.sh: 272 passed, 0 failed, 9 blocked (measured 2026-10-26 on the committed tree of the release with the package that make arch-pkg built for 20261026.01, and again on 8d90422, the packaging change after it (depends in package()), with the same counts; run under the 6.18.55-2-cachyos-lts kernel on a host with the replacement module loaded; hermetic, no hardware; the hardware checks it cannot run stay BLOCKED). A host that runs the stock codec runs one more test and blocks the two checks that compare these records: 271 passed, 0 failed, 10 blocked (derived from the run above: the stock-codec test runs and passes, the two checks that compare these records are BLOCKED; NOT RUN on such a host)"
     },
     {
       "id": "regress.license_identifiers",
