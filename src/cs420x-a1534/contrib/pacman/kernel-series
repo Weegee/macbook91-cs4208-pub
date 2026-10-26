@@ -26,31 +26,86 @@
 #   --modules-root DIR   where --hook looks for kernels (default /usr/lib/modules)
 #
 # Exit 2: bad arguments, or no readable list.
+#
+# Text interface (house text HIG). Named deviations, kept on purpose:
+#   Abweichung von FEH-2, TYP-1: --hook writes pacman hook output, which
+#     follows the makepkg convention "==> WARNING:" on stdout. The test suite
+#     pins that header.
+#   Abweichung von KAN-3: --kernel exits 1 for "not supported", like grep:
+#     0 yes, 1 no, 2 error.
 set -u
 
 SERIES_FILE=/usr/src/macbook91-cs4208-@PKGVER@/kheaders/KERNEL-SERIES
 MODULES_ROOT=/usr/lib/modules
 MODE=''
 REL=''
+PROG=kernel-series
+PKGVER='@PKGVER@'
+DOCS_URL=https://github.com/Weegee/macbook91-cs4208-pub
 
-die() { printf 'kernel-series: %s\n' "$*" >&2; exit 2; }
+die() { printf '%s: error: %s\n' "$PROG" "$*" >&2; exit 2; }
+usage_error() { printf '%s: error: %s\nHelp: %s --help\n' "$PROG" "$*" "$PROG" >&2; exit 2; }
+
+usage() {
+	cat <<USAGE
+Usage: $PROG MODE [OPTIONS]
+
+Tells which Linux kernel series macbook91-cs4208 builds its speaker driver for.
+
+Examples:
+  $PROG --list                  the shipped series
+  $PROG --kernel \$(uname -r)    is the running kernel supported
+
+Modes:
+  --list              print the shipped series, separated by spaces
+  --kernel RELEASE    print a sentence; exit 0 if RELEASE is supported, 1 if not
+  --hook              print a warning for every installed kernel of another
+                      series (what the pacman hook runs)
+  --dkms-regex        print the BUILD_EXCLUSIVE_KERNEL value for dkms.conf
+
+Options:
+  --series-file FILE   the list to read (default: the installed source tree)
+  --modules-root DIR   where --hook looks for kernels (default /usr/lib/modules)
+  -h, --help           show this help
+  -V, --version        show the version
+
+Exit status:
+  0  yes, or done
+  1  --kernel: RELEASE is not supported
+  2  usage error, or no readable list
+
+Docs and bug reports: $DOCS_URL
+USAGE
+}
+
+# usage and version may be asked for anywhere on the line (HIL-1).
+for a in "$@"; do
+	case "$a" in
+		-h|--help) usage; exit 0 ;;
+		-V|--version)
+			case $PKGVER in @*) PKGVER=unknown ;; esac
+			printf '%s (macbook91-cs4208-dkms) %s\n' "$PROG" "$PKGVER"
+			exit 0 ;;
+	esac
+done
 
 while [ $# -gt 0 ]; do
 	case "$1" in
 		--list|--hook|--dkms-regex) MODE=${1#--}; shift ;;
 		--kernel)
-			[ $# -ge 2 ] || die "--kernel needs a kernel release"
+			[ $# -ge 2 ] || usage_error "--kernel needs a kernel release"
 			MODE=kernel; REL=$2; shift 2 ;;
 		--series-file)
-			[ $# -ge 2 ] || die "--series-file needs a file"
+			[ $# -ge 2 ] || usage_error "--series-file needs a file"
 			SERIES_FILE=$2; shift 2 ;;
 		--modules-root)
-			[ $# -ge 2 ] || die "--modules-root needs a directory"
+			[ $# -ge 2 ] || usage_error "--modules-root needs a directory"
 			MODULES_ROOT=$2; shift 2 ;;
-		*) die "unknown argument: $1" ;;
+		-*) usage_error "unknown option '$1'" ;;
+		*) usage_error "unexpected argument '$1'" ;;
 	esac
 done
-[ -n "$MODE" ] || die "no mode: use --list, --kernel RELEASE, --hook or --dkms-regex"
+[ -n "$MODE" ] || usage_error "no mode given; use --list, --kernel RELEASE, --hook or --dkms-regex"
 
 [ -r "$SERIES_FILE" ] || die "cannot read the list of shipped series, $SERIES_FILE"
 SERIES=()
@@ -107,9 +162,8 @@ case "$MODE" in
 			[ -e "$d/vmlinuz" ] || continue
 			rel=$(basename "$d")
 			shipped "$rel" && continue
-			printf '\n==> WARNING: macbook91-cs4208 ==================================\n'
+			printf '\n==> WARNING: macbook91-cs4208\n'
 			unsupported "$rel" | sed 's/^/    /'
-			printf '==================================================================\n\n'
 		done
 		;;
 esac

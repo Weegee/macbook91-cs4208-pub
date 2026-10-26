@@ -64,6 +64,8 @@ install:
 
 	install -Dm755 tools/macbook91-audio-verify \
 		"$(DESTDIR)$(PREFIX)/bin/macbook91-audio-verify"
+	sed -i "s/^VERSION='@PKGVER@'/VERSION='$(VERSION)'/" \
+		"$(DESTDIR)$(PREFIX)/bin/macbook91-audio-verify"
 
 	# Card policy for this machine. NOT optional, for two independent reasons:
 	# the internal speaker path has no hardware volume control, so without the
@@ -112,8 +114,8 @@ arch-pkg: dist
 	@want=$$(sed -n "s/^sha256sums=('\([0-9a-f]*\)').*/\1/p" packaging/arch/PKGBUILD); \
 	have=$$(cut -d' ' -f1 dist/$(NAME)-$(VERSION).tar.sha256); \
 	if [ "$$want" != "$$have" ]; then \
-		echo "arch-pkg: PKGBUILD sha256sums is $$want, tarball is $$have" >&2; \
-		echo "arch-pkg: set sha256sums to $$have, make srcinfo, commit (--amend), rerun" >&2; \
+		echo "arch-pkg: error: the PKGBUILD pins sha256sums $$want, but the tarball is $$have" >&2; \
+		echo "  Set sha256sums to $$have, run make srcinfo, commit with --amend, then run make arch-pkg again" >&2; \
 		exit 1; \
 	fi
 	$(MAKE) --no-print-directory _arch-build
