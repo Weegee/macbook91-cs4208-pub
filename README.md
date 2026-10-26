@@ -47,6 +47,9 @@ sudo reboot
 macbook91-audio-verify
 ```
 
+`macbook91-audio-verify --help` lists its options; `--no-sound` runs the
+software checks only and plays and records nothing.
+
 `sha256sum` must print `OK` for `PKGBUILD`, `macbook91-cs4208.install` and the
 source tarball `macbook91-cs4208-dkms-<version>.tar`. `--ignore-missing` skips
 the lines of `SHA256SUMS` whose files you did not download (`.SRCINFO`,

@@ -180,7 +180,8 @@ exactly (`--fuzz=0`) or the fetch fails. Review and commit the lockfile
 change; `make arch-pkg-dev` then builds from the newest tag it lists for each
 series. There is no override.
 
-Status: 20261026.01 has not run on hardware yet; it builds for 6.18 (LTS), 7.2 and
+Status: 20261026.02 has not run on hardware yet (its module code is that of
+20261026.01, which has not run either); it builds for 6.18 (LTS), 7.2 and
 7.3 with no compiler diagnostic. No kernel of the 7.3 series has run this
 module on hardware. 7.2 is the series the speaker, microphone and suspend
 results were obtained on. 6.18 (LTS): `macbook91-audio-verify` passed on this machine under

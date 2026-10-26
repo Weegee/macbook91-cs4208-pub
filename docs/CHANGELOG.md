@@ -5,6 +5,65 @@ day); the last section summarises the earlier numbering. Only
 `release/20261021.01/` is part of this repository; older release directories
 cited below were removed from it and the citations are history.
 
+## 20261026.02: text interfaces follow the house text HIG
+
+The module, the driver behaviour and the hook logic are unchanged from
+20261026.01. What changed is the text the package and its tools print and
+accept at a terminal, plus the PKGBUILD change below. Built and tested in
+software; NOT RUN on hardware when this section was written
+(`docs/test-status.json`, `hw.runtime_20261026_02`).
+
+- `macbook91-audio-verify`: new `-h/--help` (Usage, Examples, Options,
+  Environment, Files, Exit status), `-V/--version` (`macbook91-audio-verify
+  (macbook91-cs4208-dkms) VERSION`), `-y` for `--yes`, `--no-input` and
+  `--color=WHEN`/`--no-color` (also `MACBOOK91_AUDIO_VERIFY_COLOR`,
+  `NO_COLOR`). A wrong option exits 2 with `macbook91-audio-verify: error:`,
+  a `Did you mean:` line where one fits and `Help: ... --help`. Questions,
+  instructions and errors go to stderr; the check lines and the verdict stay
+  on stdout. It asks only when stdin and stderr are terminals and accepts
+  y, yes, j, ja, n, no and nein; without a terminal the listening checks are
+  reported SKIPPED. Ctrl+C and SIGTERM print `cancelled` and exit 130 and 143
+  after the cleanup. Durations read `30 s`, one-line messages have no final
+  period. Deviations (named in the script): SKIPPED listening checks do not
+  change exit 0 (KAN-2), no default answers (EIN-3), one detail level
+  (MOD-5).
+- Pacman hook `71-macbook91-cs4208-series.hook` and `kernel-series`: the
+  warning block is `==> WARNING: macbook91-cs4208` without rule lines;
+  `kernel-series` has `--help`, `--version` and the same error form.
+  Deviation: `==> WARNING:` is the makepkg/pacman convention (FEH-2, TYP-1).
+- Install scriptlet: the post-install text has no capitalised headings or
+  dashes and fits 80 columns; the rollback command stands on its own line.
+- `make install` stamps the package version into the installed verifier, so
+  `--version` is not "unknown"; `make arch-pkg` reports a mismatch as
+  `arch-pkg: error: ...`.
+- Development tools (not shipped in the package): `macbook91-runner`,
+  `macbook91-codec-state`, `macbook91-wake-probe`, `macbook91-amp-transport`,
+  `macbook91-codec-dump`, `macbook91-fetch-macos-recovery`,
+  `macbook91-verify-recovery-image`, `macbook91-kc-disasm`,
+  `macbook91-kc-symbols`, `dev-audio-collect.sh`, `packaging/fetch-upstream.sh`,
+  `packaging/promote-release.sh`, `packaging/mkdist.py`,
+  `packaging/make-package.sh` and `tests/run-tests.sh` have `--help` and
+  `--version`, report errors as `PROG: error: ...` and exit 2 on wrong usage
+  with a `Did you mean:` and `Help:` line. The collector takes `-o/--output
+  DIR`, prints only the output directory on stdout (it printed
+  `baseline written to:` and `files:` before; the file count is a note on
+  stderr now), and the macOS recovery fetcher prints progress on stderr.
+  The runner reports Ctrl+C and SIGTERM as `cancelled` (130, 143) after it
+  restored the machine state. Deviation from
+  KAN-3 (named in the tools): the runner and the probes it reads keep exit 2
+  for "could not measure" and 3 for usage and runtime errors, 4 for
+  INCOMPLETE, because verdict logic and tests depend on them.
+- Not changed on purpose: the superseded probes (kept as evidence, nothing
+  new is added to them, `tools/README.md`).
+- Package: the PKGBUILD sets `depends` inside `package()`, so makepkg also
+  builds on a host without the CachyOS repositories (packaging change of
+  8d90422, now part of a release). The built package carries the same
+  dependencies and files as before apart from the changed scripts.
+- Tests: `tests/run-tests.sh` has a new section for the text interfaces
+  (`--help` first line and exit, `--version`, unknown option, colour
+  precedence, suggestions, no tracebacks); `tests/run-tests.sh` answers
+  `--help` and `--version` itself.
+
 ## 20261026.01: kernel series 7.3, the LTS kernel as the default, one series list
 
 **Driver behaviour changes.** The A1534 path pins its mainline fixup, and the

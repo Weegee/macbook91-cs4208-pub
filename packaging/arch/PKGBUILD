@@ -11,7 +11,7 @@
 # name. See "Renamed" below.
 pkgname=macbook91-cs4208-dkms
 _pkgname="${pkgname%-dkms}"
-pkgver=20261026.01
+pkgver=20261026.02
 pkgrel=1
 pkgdesc="CS4208 codec driver restoring internal speakers on Apple MacBook9,1 (A1534)"
 arch=('x86_64')
@@ -89,7 +89,7 @@ makedepends=('make')
 # inside the package and are enforced by the Makefile's `check` target, and
 # what they establish is integrity of the installed copy, not origin.
 source=("$pkgname-$pkgver.tar")
-sha256sums=('a841a3dca1a75665b1e56b5127cb1eabd7cac622627c192d68f0c6e540ab5430')
+sha256sums=('27978219fe35cb94347c2cecc52c76e490fee9c9bda42eff65a7e7075d809f25')
 
 # The installation itself is the root Makefile's `install` target, so the
 # same file list is used by this package and by anyone installing from the
