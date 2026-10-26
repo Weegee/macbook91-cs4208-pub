@@ -1,0 +1,49 @@
+macbook91-cs4208-dkms 20261026.02-1 - RELEASE (tagged v20261026.02; text interfaces follow the house text HIG; the module is unchanged; hardware NOT RUN, released by the maintainer's decision without the hardware gate)
+
+What changed: the full list is in docs/CHANGELOG.md.
+- macbook91-audio-verify has --help, --version, -y, --no-input, --color and --no-color. A wrong
+  option prints "macbook91-audio-verify: error: ..." with a "Did you mean:" line where one fits
+  and "Help: ... --help", and exits 2. Questions, instructions and errors go to stderr; the check
+  lines and the verdict stay on stdout. It asks only on a terminal; without one the listening
+  checks are reported SKIPPED. Ctrl+C and SIGTERM print "cancelled" and exit 130 and 143.
+- The pacman hook warning is "==> WARNING: macbook91-cs4208" without rule lines; the kernel-series
+  helper has --help and --version. The install scriptlet text is reworded. make install stamps the
+  package version into the installed verifier.
+- The development and release tools (runner, collector, codec and wake probes, fetch and release
+  scripts, test runner) have --help and --version and report errors as "PROG: error: ...".
+  The collector takes -o/--output and prints only the output directory on stdout.
+- The PKGBUILD sets depends inside package(), so makepkg also builds on a host without the
+  CachyOS repositories.
+- The module code is that of 20261026.01.
+
+Hardware: NOT RUN for 20261026.02. The maintainer decided on 2026-10-26 to release without the
+hardware gate of docs/RELEASING.md section 4, as for 20261026.01. Open, not verified: install of
+this package (pacman -U), macbook91-audio-verify on the LTS kernel and on 7.3.0-4-cachyos with the
+listening checks answered (its prompts, --help, --version, --color and the cancelled exit are new),
+the pacman hook output on the next transaction, and everything listed for 20261026.01
+(hw.runtime_20261026_01). The changes are text and command-line handling, covered by the hermetic
+suite (tests/run-tests.sh, section 7f) only; a build, a cache or a test run is not a hardware PASS.
+
+Gates on the committed tree, run on 2026-10-26 under the 6.18.55-2-cachyos-lts kernel
+(VERIFIED, each ran):
+- tests/run-tests.sh with the package built from this tree, on a host with the replacement
+  module loaded: 328 passed, 0 failed, 9 blocked (the hardware checks it cannot run stay
+  BLOCKED).
+- make dist gives the tarball the PKGBUILD pins (sha256
+  27978219fe35cb94347c2cecc52c76e490fee9c9bda42eff65a7e7075d809f25); makepkg --printsrcinfo
+  equals .SRCINFO.
+- namcap on the package: 0 errors, 5 warnings explained in docs/NAMCAP.md; namcap on the
+  PKGBUILD: no output.
+- ShellCheck at warning level: clean on the 12 tracked shell scripts and the install scriptlet.
+- The promotion gate (the maintainer's extra test scripts and the scan for identifiers that
+  must not be published, over the files a commit carries) passed: 0 hits.
+
+Release assets: the files listed in SHA256SUMS and SHA256SUMS itself, which
+are the text files of this directory and the source tarball. No built package
+is part of this release.
+
+Maintainer's local build of the package, for reference only. It is not
+published. The package records the build date and the build environment, so a
+package you build yourself will not have this checksum; the reproducible
+artifact is the source tarball in SHA256SUMS.
+260f4ca6a052a24a6edb7a2d1a728be39884d2db40476e1968a5be728c5c2492  macbook91-cs4208-dkms-20261026.02-1-x86_64.pkg.tar.zst

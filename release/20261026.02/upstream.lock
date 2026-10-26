@@ -32,6 +32,17 @@
 # local-changes.patch was reworded (same line count, no code change: the files
 # are identical once comments are stripped). 2026-10-21: changed again, for the
 # same reason, by two comments of local-changes.patch.
+# 2026-10-26: changed by code. On a match the patched probe now fixes the
+# mainline fixup to CS4208_GPIO0 before the quirk tables are consulted
+# (Linux 7.3 added a PCI-SSID quirk this machine matches), and two comments
+# were corrected.
+#
+# v7.3 seeded 2026-10-26 for the CachyOS kernel (7.3.0-4-cachyos), with that
+# patch at fuzz 0. The six fetched files are byte-identical to CachyOS's own
+# tree at tag cachyos-7.3.0-4, and a module built from the unpatched v7.3
+# cs420x.c has the srcversion of that kernel's in-tree codec. 7.2 stays as the
+# predecessor series while the same patch applies to it at fuzz 0 and builds
+# without a change; it goes when 7.4 arrives (docs/RELEASING.md, section 0).
 
 v7.2.6     6f0d3e1bd1117d3443ffbc8de31cd92c3295f0cff0a035f1691f74f937bb51be  upstream/cs420x.c
 v7.2.6     21b31260451c5fd4868f030cad31b86012acd3e5091caaa39a902d648073d2a9  kheaders/hda_local.h
@@ -39,7 +50,7 @@ v7.2.6     59c9e34e50f22e36ddc45dc22ca822838104e745884e6841bee73e65876a0716  khe
 v7.2.6     b6af84afebab898958e2a972acab3783ed1849c826961f8333f01bd127572b49  kheaders/hda_jack.h
 v7.2.6     9e943b14f5ab34c3d96474adb9f7ad289e8e413616af4c1ff69c93ad7f7cf4cf  kheaders/hda_beep.h
 v7.2.6     9175959750d86f715d15eb2e4c063a95861ed7d737418e9f55843b1af04446d6  kheaders/generic.h
-v7.2.6     b63781006454547e4dcb245e28d9b28a3e63d67ea713be77c11a87e266e56b45  cs420x.c
+v7.2.6     dc6e5d997f63f00c2ee2509272963566841767e12489f7e126fb3fd62dc6aaeb  cs420x.c
 derived    1bc934e6bf51208c40cd813211935f80703885a66ed1b29ef012adf013149496  vendored/a1534_sequence.h
 v6.18.55   f686dea51b064bb341a06938afbe4607170c8bf5ad2431c7be8eb23edc991f69  upstream/cs420x.c
 v6.18.55   47f352d10beacc76f10ae3776e148674803982350f5058415afc65bd4288940a  kheaders/hda_local.h
@@ -47,4 +58,11 @@ v6.18.55   59c9e34e50f22e36ddc45dc22ca822838104e745884e6841bee73e65876a0716  khe
 v6.18.55   668b76a1651bf8e363bde6f2f808d183e68d4f21f7188a229f43abf8a2dcb75e  kheaders/hda_jack.h
 v6.18.55   9e943b14f5ab34c3d96474adb9f7ad289e8e413616af4c1ff69c93ad7f7cf4cf  kheaders/hda_beep.h
 v6.18.55   9175959750d86f715d15eb2e4c063a95861ed7d737418e9f55843b1af04446d6  kheaders/generic.h
-v6.18.55   41a224aa7145dddab31af102b3a98ea5a92a3d75910f6c3eba19fd7afac4ec71  cs420x.c
+v6.18.55   c04310eb7106381b807c04728aea38efaf73dc5b7bf4de2225ce2cfa912a402e  cs420x.c
+v7.3       d3a8bf9be517872233ae0b800432a1c08ed4c37f3ba83315f5bc37ea4922e6b0  upstream/cs420x.c
+v7.3       a70a791c8713eb236a0422612a8a9f81089b8ac29ba5b3d077be57315c3dc9c2  kheaders/hda_local.h
+v7.3       c1f46247b8dc659d53e4afc5c4eeb5cf8ce45878eda454a77a209b11fdaa8b78  kheaders/hda_auto_parser.h
+v7.3       b6af84afebab898958e2a972acab3783ed1849c826961f8333f01bd127572b49  kheaders/hda_jack.h
+v7.3       9e943b14f5ab34c3d96474adb9f7ad289e8e413616af4c1ff69c93ad7f7cf4cf  kheaders/hda_beep.h
+v7.3       9175959750d86f715d15eb2e4c063a95861ed7d737418e9f55843b1af04446d6  kheaders/generic.h
+v7.3       9b308edc7e653fb781453b8c95b91fb28b4cc45efbec284336172c21c2394638  cs420x.c

@@ -1,0 +1,63 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+# Text interface: the house text HIG (text-hig skill). pacman prints this text
+# as it is and cannot colour or prompt, so it is plain lines of at most 80
+# columns, with the commands to copy set apart by four spaces.
+post_install() {
+    cat <<'MSG'
+
+macbook91-cs4208 is installed. Apply the card policy and reboot:
+
+    systemctl --user restart wireplumber
+    sudo reboot
+
+Then check the result. The verifier asks a few questions, prints one PASS or
+FAIL and, on failure, writes a single diagnostic archive:
+
+    macbook91-audio-verify
+
+What the WirePlumber rule does, and why it is not optional
+
+  Software volume. The internal speaker path has no hardware volume control,
+  so without the rule the volume slider does nothing and output stays at full
+  scale. macbook91-audio-verify reports a FAIL if the rule did not take effect.
+
+  Its own ACP profile set. This card has exactly one usable analog output
+  profile, and the stock profile set drops that profile's only port while
+  headphones are plugged in: the desktop then shows "Dummy Output" and there
+  is no sound at all, from speakers or headphones. The driver moves the stream
+  to the headphone converter itself, so the port must stay.
+
+  The speakers appear as a 4-channel device ("Analog Surround 4.0"): the four
+  internal amplifiers sit on four TDM slots, measured as two stereo pairs
+  rather than a surround layout. Stereo content is copied to both pairs, so it
+  reaches all four amplifiers.
+
+  Speakers survive a deep suspend, confirmed on hardware across five suspends
+  in one day, the longest 1 h 44 min.
+
+To roll back completely, remove the package and reboot:
+
+    pacman -R macbook91-cs4208-dkms
+
+Kernel series
+
+MSG
+    printf 'The module is built for kernels of Linux series %s.\n' \
+        "$(/usr/lib/macbook91-cs4208/kernel-series --list 2>/dev/null || echo '(unknown: the series list could not be read)')"
+    cat <<'MSG'
+DKMS skips every other kernel, which keeps its stock codec and has no speaker
+output. After every kernel installation a warning names each installed kernel
+of another series. Boot the LTS kernel for audio until the package supports
+that series.
+
+The CachyOS LTS kernel (linux-cachyos-lts) is the default this package depends
+on. Install linux-cachyos-headers to have the module built for the current
+CachyOS kernel as well.
+
+MSG
+}
+
+# Deliberately the same message: an upgrade shows what an installation shows.
+# (Replacing the package's early name macbook91-cs4208 is a removal plus an
+# installation, so post_install runs then; measured in an isolated pacman root.)
+post_upgrade() { post_install; }

@@ -11,14 +11,14 @@
 # name. See "Renamed" below.
 pkgname=macbook91-cs4208-dkms
 _pkgname="${pkgname%-dkms}"
-pkgver=20261021.01
+pkgver=20261026.02
 pkgrel=1
 pkgdesc="CS4208 codec driver restoring internal speakers on Apple MacBook9,1 (A1534)"
 arch=('x86_64')
 # This project's own home. The driver's approach comes from
 # https://github.com/leifliddy/macbook12-audio-driver; that provenance is
-# recorded with checksums in UPSTREAM.txt and local-changes.patch, not in the
-# field that tells a user where to report a bug.
+# recorded with commit and checksum in src/cs420x-a1534/vendored/PROVENANCE.md,
+# not in the field that tells a user where to report a bug.
 url='https://github.com/Weegee/macbook91-cs4208-pub'
 # Every license of what the package installs; README.md's "Provenance and
 # licensing" maps them to paths. GPL-2.0-only is the conservative reading of
@@ -38,35 +38,34 @@ provides=("$_pkgname=$pkgver")
 conflicts=("$_pkgname")
 replaces=("$_pkgname")
 
-# dkms pulls in the build tooling it needs at install time.
+# dkms pulls in the build tooling it needs at install time. The compiler is
+# the one the target kernel's own .config names: the CachyOS LTS kernel is
+# built with GCC, which dkms depends on, and linux-cachyos-headers, the
+# headers of the clang-built current kernel, depends on clang, lld and llvm
+# itself. The Makefile's check target names a compiler that is still missing.
 #
-# clang/lld/llvm are optdepends, not dependencies: the Makefile takes the
-# compiler family from the *target kernel's* .config (the CachyOS kernel is
-# built with clang, the Arch kernel with GCC), so on a GCC-built kernel those
-# three packages would be pulled in and never used. The two places that can
-# actually tell - the Makefile's check target and this package's install
-# scriptlet - name the missing compiler and the command that installs it.
+# linux-cachyos-lts-headers is the kernel this package is for by default: the
+# LTS series is always supported, DKMS builds only for a kernel whose headers
+# are installed, and the headers package depends on linux-cachyos-lts. The
+# current CachyOS series is supported as well, through the optional
+# dependency below. A kernel of any other series gets no module, and the
+# package's pacman hook warns about it after the transaction.
 #
 # wireplumber stays a hard requirement. It is not a convenience: without the
 # shipped software-volume configuration this card has no working volume
 # control on the internal speakers at all.
-depends=('dkms' 'wireplumber')
-# The build needs the exact headers of the kernel it targets. They are not a
-# hard dependency of the package itself because DKMS builds per installed
-# kernel, and because the right one depends on which kernel is installed -
-# naming a single headers package here would be wrong for most of them.
-optdepends=('linux-cachyos-headers: build against the CachyOS kernel'
-            'linux-cachyos-lts-headers: build against the CachyOS LTS kernel'
-            'linux-headers: build against the Arch kernel'
-            'linux-lts-headers: build against the Arch LTS kernel'
-            'clang: required by kernels built with clang, e.g. linux-cachyos'
-            'lld: required by kernels built with clang'
-            'llvm: required by kernels built with clang'
+#
+# The depends array itself is set in package(), not up here. makepkg checks
+# top-level depends before it builds, so a build host without the CachyOS
+# repositories, such as a plain Arch container, would have to install
+# linux-cachyos-lts-headers and cannot. Depends set in package() are not
+# checked at build time, and the built package carries them all the same.
+optdepends=('linux-cachyos-headers: build the module for the current CachyOS kernel as well'
             'alsa-utils: required by macbook91-audio-verify for playback and capture checks'
             'sox: lets macbook91-audio-verify measure microphone level automatically')
 
 # make, for package(), is the only tool makepkg needs; the module itself is built
-# by DKMS on the target machine, with its own dependencies above.
+# by DKMS on the target machine, with the dependencies package() declares.
 makedepends=('make')
 
 # One source: the reproducible tarball `make dist` writes to dist/. makepkg
@@ -76,10 +75,11 @@ makedepends=('make')
 # Where the tree in it comes from: the kernel half -
 # cs420x.c and the private HDA headers - is not carried in the project's
 # repository: `make dist` first runs packaging/fetch-upstream.sh at the newest
-# kernel tag of each series recorded in packaging/upstream.lock (6.18 and 7.2),
-# which fetches exactly six files per series from git.kernel.org and checks
-# every one against that lockfile before it is allowed into the tree. The A1534 bring-up sequence is still carried in the
-# repository and is still never fetched from anywhere.
+# kernel tag of each series recorded in packaging/upstream.lock, which
+# fetches exactly six files per series from git.kernel.org and checks every
+# one against that lockfile before it is allowed into the tree. The A1534
+# bring-up sequence is still carried in the repository and is still never
+# fetched from anywhere.
 #
 # packaging/mkdist.py writes the same bytes from the same inputs, so the
 # checksum is pinned here at release time and `make arch-pkg` refuses a
@@ -89,12 +89,13 @@ makedepends=('make')
 # inside the package and are enforced by the Makefile's `check` target, and
 # what they establish is integrity of the installed copy, not origin.
 source=("$pkgname-$pkgver.tar")
-sha256sums=('21eb4fa135c109bfa9431fa4f0d8e2168d3a43a91bc6fcb96d891d39a024259a')
+sha256sums=('27978219fe35cb94347c2cecc52c76e490fee9c9bda42eff65a7e7075d809f25')
 
 # The installation itself is the root Makefile's `install` target, so the
 # same file list is used by this package and by anyone installing from the
 # tarball by hand.
 package() {
+    depends=('dkms' 'wireplumber' 'linux-cachyos-lts-headers')
     cd "$pkgname-$pkgver" || exit 1
     make PREFIX=/usr DESTDIR="$pkgdir" install
 }

@@ -2,8 +2,9 @@
 
 Versions have the form YYYYMMDD.NN (release date, NN counts releases that
 day); the last section summarises the earlier numbering. Only
-`release/20261021.01/` is part of this repository; older release directories
-cited below were removed from it and the citations are history.
+`release/20261026.01/` and `release/20261026.02/` are part of this repository;
+older release directories cited below were removed from it and the citations
+are history.
 
 ## 20261026.02: text interfaces follow the house text HIG
 
