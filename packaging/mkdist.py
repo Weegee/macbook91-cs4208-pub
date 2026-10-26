@@ -31,6 +31,7 @@ input), and the checksum pinned in the PKGBUILD has to hold on every machine.
 
 from __future__ import annotations
 
+import argparse
 import fnmatch
 import hashlib
 import io
@@ -88,18 +89,58 @@ def git(*args: str) -> str:
     return subprocess.run(["git", "-C", ROOT, *args], check=True, capture_output=True, text=True).stdout
 
 
+PROG = "mkdist.py"
+
+
 def fail(msg: str) -> int:
-    print(f"mkdist: {msg}", file=sys.stderr)
+    print(f"{PROG}: error: {msg}", file=sys.stderr)
     return 1
 
 
+class HelpFormatter(argparse.RawDescriptionHelpFormatter):
+    """The house help layout: a capitalised Usage: heading."""
+
+    def _format_usage(self, usage, actions, groups, prefix):
+        return super()._format_usage(usage, actions, groups, prefix or "Usage: ")
+
+
+class Parser(argparse.ArgumentParser):
+    """A usage error is a short message, a pointer to --help and exit status 2."""
+
+    def error(self, message):
+        sys.stderr.write(f"{self.prog}: error: {message}\nHelp: {self.prog} --help\n")
+        sys.exit(2)
+
+
+def parse_args(argv: list[str], version: str) -> argparse.Namespace:
+    ap = Parser(
+        prog=PROG,
+        usage="%(prog)s [--out DIR] [--allow-dirty]",
+        description="Build the package's source tarball byte-reproducibly and "
+        "print its sha256 and path. The tarball is what packaging/arch/PKGBUILD pins.",
+        epilog="Examples:\n"
+        "  python3 packaging/mkdist.py\n"
+        "  python3 packaging/mkdist.py --allow-dirty --out /tmp/dist\n\n"
+        "Exit status:\n"
+        "  0  the tarball was written\n"
+        "  1  the tree is not ready (uncommitted changes, not assembled, unexpected files)\n"
+        "  2  usage error\n\n"
+        "Docs and bug reports: https://github.com/Weegee/macbook91-cs4208-pub",
+        formatter_class=HelpFormatter,
+    )
+    ap._optionals.title = "Options"
+    ap.add_argument("--out", metavar="DIR", help="write into DIR instead of dist/")
+    ap.add_argument("--allow-dirty", action="store_true", help="accept uncommitted changes to tracked files")
+    ap.add_argument("-V", "--version", action="version", version=f"{PROG} (macbook91-cs4208-dkms) {version}")
+    return ap.parse_args(argv)
+
+
 def main(argv: list[str]) -> int:
-    allow_dirty = "--allow-dirty" in argv
-    out_dir = os.path.join(ROOT, "dist")
-    if "--out" in argv:
-        out_dir = os.path.abspath(argv[argv.index("--out") + 1])
     with open(os.path.join(ROOT, "VERSION"), encoding="ascii") as fh:
         version = fh.read().strip()
+    args = parse_args(argv, version)
+    allow_dirty = args.allow_dirty
+    out_dir = os.path.abspath(args.out) if args.out else os.path.join(ROOT, "dist")
 
     if not allow_dirty and git("status", "--porcelain", "--untracked-files=no").strip():
         return fail("working tree has uncommitted changes; commit first (or --allow-dirty)")

@@ -68,44 +68,105 @@ OPT_OFFLINE=0
 OPT_ACCEPT_NEW=0
 OPT_PRINT_TAG=0
 
-die() { printf 'ERROR: %s\n' "$*" >&2; exit 1; }
+PROG=fetch-upstream.sh
+
+die() { printf '%s: error: %s\n' "$PROG" "$*" >&2; exit 1; }
 note() { printf '%s\n' "$*" >&2; }
 
+# Abweichung von HIL-4: the help ends with a pointer to the repository files and
+# not with the project URL, because tests/run-tests.sh pins this script to name
+# no host but git.kernel.org.
 usage() {
 	cat <<'USAGE'
-usage: fetch-upstream.sh [options]
+Usage: fetch-upstream.sh [OPTIONS]
 
-  (no option)      assemble the newest tag upstream.lock records for every
-                   kernel series it knows
-  --all            the same, explicitly
-  --tag vX.Y[.Z]   assemble this tag; repeat for several series. Only the
-                   named series are assembled, and any other is removed
-  --kver RELEASE   resolve the tag from this kernel release (e.g. 7.2.6-1-cachyos)
-  --dest DIR       assemble into DIR instead of src/cs420x-a1534
-  --cache DIR      cache directory (default packaging/.upstream-cache)
-  --offline        use the cache only; never touch the network
-  --accept-new     record a hash for a (tag, file) pair the lockfile does not
-                   know yet. Never overrides a pair it already knows.
-  --print-tag      print the resolved tags, one per line, and exit
-  -h, --help       this text
+Assemble the upstream-derived half of src/cs420x-a1534: fetch cs420x.c and the
+private HDA headers from git.kernel.org, check every file against
+packaging/upstream.lock and apply this project's patches.
 
-KDIR, when set to a kernel build directory and no tag option is given,
-resolves the tag from that kernel's utsrelease.h.
+Examples:
+  packaging/fetch-upstream.sh
+  packaging/fetch-upstream.sh --offline --tag v7.2.6
+  packaging/fetch-upstream.sh --print-tag --kver 7.2.6-1-cachyos
+
+Options:
+      --all           assemble the newest tag upstream.lock records for every
+                      kernel series (the default)
+      --tag vX.Y[.Z]  assemble this tag; repeat for several series. Only the
+                      named series are assembled and any other is removed
+      --kver RELEASE  resolve the tag from this kernel release
+                      (for example 7.2.6-1-cachyos)
+      --dest DIR      assemble into DIR instead of src/cs420x-a1534
+      --cache DIR     cache directory (default packaging/.upstream-cache)
+      --offline       use the cache only and never touch the network
+      --accept-new    record a hash for a (tag, file) pair the lockfile does
+                      not know yet; never overrides a pair it already knows
+      --print-tag     print the resolved tags, one per line, and exit
+  -h, --help          show this help and exit
+  -V, --version       show the version and exit
+
+Environment:
+  KDIR  a kernel build directory; with no tag option the tag is resolved from
+        its include/generated/utsrelease.h
+
+Exit status:
+  0  done
+  1  a fetch failed, a hash does not match or a patch does not apply
+  2  usage error
+
+Docs and bug reports: see README.md and docs/RELEASING.md in the repository
 USAGE
 }
 
+version() {
+	local v=unknown
+	[ -r "$ROOT/VERSION" ] && v=$(head -n1 "$ROOT/VERSION")
+	printf '%s (macbook91-cs4208-dkms) %s\n' "$PROG" "$v"
+}
+
+usage_error() {  # <message> [<option the user probably meant>]
+	printf '%s: error: %s\n' "$PROG" "$1" >&2
+	[ -z "${2:-}" ] || printf 'Did you mean: %s %s\n' "$PROG" "$2" >&2
+	printf 'Help: %s --help\n' "$PROG" >&2
+	exit 2
+}
+
+# The nearest known option for a mistyped one: same text up to the first "=",
+# compared after dropping dashes.
+suggest_option() {
+	local want="${1%%=*}" o k
+	want=${want//-/}
+	for o in --all --tag --kver --dest --cache --offline --accept-new --print-tag --version --help; do
+		k=${o//-/}
+		if [ "$k" = "$want" ] || [ "${k#"$want"}" != "$k" ] && [ ${#want} -ge 3 ]; then
+			printf '%s\n' "$o"
+			return 0
+		fi
+	done
+	return 1
+}
+
+for arg in "$@"; do
+	case "$arg" in
+		-h|--help) usage; exit 0 ;;
+		-V|--version) version; exit 0 ;;
+	esac
+done
+
+needs_value() { [ "$2" -ge 2 ] || usage_error "$1 needs a value"; }
+
 while [ $# -gt 0 ]; do
 	case "$1" in
-		--tag) OPT_TAGS+=("${2:?--tag needs a value}"); shift 2 ;;
+		--tag) needs_value "$1" "$#"; OPT_TAGS+=("$2"); shift 2 ;;
 		--all) OPT_ALL=1; shift ;;
-		--kver) OPT_KVER="${2:?--kver needs a value}"; shift 2 ;;
-		--dest) DEST="${2:?--dest needs a value}"; shift 2 ;;
-		--cache) CACHE="${2:?--cache needs a value}"; shift 2 ;;
+		--kver) needs_value "$1" "$#"; OPT_KVER="$2"; shift 2 ;;
+		--dest) needs_value "$1" "$#"; DEST="$2"; shift 2 ;;
+		--cache) needs_value "$1" "$#"; CACHE="$2"; shift 2 ;;
 		--offline) OPT_OFFLINE=1; shift ;;
 		--accept-new) OPT_ACCEPT_NEW=1; shift ;;
 		--print-tag) OPT_PRINT_TAG=1; shift ;;
-		-h|--help) usage; exit 0 ;;
-		*) usage >&2; die "unknown argument: $1" ;;
+		-*) usage_error "unknown option: $1" "$(suggest_option "$1" || true)" ;;
+		*) usage_error "unexpected argument: $1" ;;
 	esac
 done
 

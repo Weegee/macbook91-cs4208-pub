@@ -19,6 +19,35 @@
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+
+usage() {
+	cat <<'USAGE'
+Usage: make-package.sh [MAKEPKG_OPTIONS]
+
+Build macbook91-cs4208-dkms from the working tree with make arch-pkg-dev. The
+package lands in dist/. Every other argument goes to makepkg.
+
+Examples:
+  packaging/make-package.sh
+  A1534_FETCH_ARGS='--tag v7.2.6 --offline' packaging/make-package.sh --noconfirm
+
+Options:
+  -h, --help  show this help and exit
+
+Environment:
+  A1534_FETCH_ARGS  replaces the options of packaging/fetch-upstream.sh
+                    (default: --all)
+
+Exit status:
+  The status of make arch-pkg-dev (0 when the package was built).
+
+Docs and bug reports: https://github.com/Weegee/macbook91-cs4208-pub
+USAGE
+}
+
+case "${1:-}" in
+	-h|--help) usage; exit 0 ;;
+esac
 args=(-C "$ROOT" --no-print-directory arch-pkg-dev "MAKEPKG_FLAGS=$*")
 if [ -n "${A1534_FETCH_ARGS:-}" ]; then
 	args+=("FETCH_ARGS=$A1534_FETCH_ARGS")

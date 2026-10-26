@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # SPDX-License-Identifier: GPL-3.0-or-later
 #
-# promote-release.sh — copy the release files into release/<pkgver>/.
+# promote-release.sh: copy the release files into release/<pkgver>/.
 #
 # Promotion used to be done by hand, and .SRCINFO was then missing from
 # thirteen releases in a row. A gate enforced by memory is the same gate that
@@ -25,6 +25,63 @@
 #
 set -euo pipefail
 
+HERE="$(cd "$(dirname "$0")" && pwd)"
+ROOT="$(cd "$HERE/.." && pwd)"
+PROG=promote-release.sh
+
+err() { printf '%s: error: %s\n' "$PROG" "$*" >&2; }
+say() { printf '%s\n' "$*" >&2; }
+
+usage() {
+	cat <<'USAGE'
+Usage: promote-release.sh
+       promote-release.sh --seal VERSION
+       promote-release.sh --gate
+
+Copy the release files into release/<pkgver>/ and seal them with SHA256SUMS.
+Where the maintainer's private tree is present, run its tests and the export
+guard as well. Nothing is committed, tagged, pushed or published.
+
+Examples:
+  packaging/promote-release.sh
+  packaging/promote-release.sh --seal 20261026.02
+
+Options:
+      --seal VERSION  regenerate SHA256SUMS of release/VERSION after STATUS.txt
+                      was filled in
+      --gate          run only the private gate and promote nothing
+  -h, --help          show this help and exit
+  -V, --version       show the version and exit
+
+Exit status:
+  0  done
+  1  a check refused the promotion or the gate failed
+  2  usage error
+
+Docs and bug reports: https://github.com/Weegee/macbook91-cs4208-pub
+USAGE
+}
+
+version() {
+	local v=unknown
+	[ -r "$ROOT/VERSION" ] && v=$(head -n1 "$ROOT/VERSION")
+	printf '%s (macbook91-cs4208-dkms) %s\n' "$PROG" "$v"
+}
+
+usage_error() {  # <message> [<option the user probably meant>]
+	printf '%s: error: %s\n' "$PROG" "$1" >&2
+	[ -z "${2:-}" ] || printf 'Did you mean: %s %s\n' "$PROG" "$2" >&2
+	printf 'Help: %s --help\n' "$PROG" >&2
+	exit 2
+}
+
+for arg in "$@"; do
+	case "$arg" in
+		-h|--help) usage; exit 0 ;;
+		-V|--version) version; exit 0 ;;
+	esac
+done
+
 # --seal <version>: regenerate an existing release directory's SHA256SUMS.
 # Promotion writes a STATUS.txt template that has to be filled in by hand, and
 # STATUS.txt is itself covered by SHA256SUMS - so the checksums must be redone
@@ -32,14 +89,21 @@ set -euo pipefail
 # thirteen releases without a .SRCINFO.
 SEALED=""
 GATE_ONLY=0
-if [ "${1:-}" = "--seal" ]; then
-	SEALED="${2:?usage: promote-release.sh --seal <version>}"
-elif [ "${1:-}" = "--gate" ]; then
-	GATE_ONLY=1
+if [ $# -gt 0 ]; then
+	case "$1" in
+		--seal)
+			[ $# -ge 2 ] || usage_error "--seal needs a version"
+			[ $# -eq 2 ] || usage_error "unexpected argument: $3"
+			SEALED=$2 ;;
+		--gate)
+			[ $# -eq 1 ] || usage_error "unexpected argument: $2"
+			GATE_ONLY=1 ;;
+		--se*|--s) usage_error "unknown option: $1" "--seal" ;;
+		--ga*|--g) usage_error "unknown option: $1" "--gate" ;;
+		-*) usage_error "unknown option: $1" ;;
+		*) usage_error "unexpected argument: $1" ;;
+	esac
 fi
-
-HERE="$(cd "$(dirname "$0")" && pwd)"
-ROOT="$(cd "$HERE/.." && pwd)"
 
 # The files a clone has, and therefore the ones SHA256SUMS may name.
 # upstream.lock is on the list: a promoted release has to say which kernel
@@ -55,7 +119,7 @@ seal() { # seal DIR
 	for f in "$1"/*.tar "$1"/cs420x-a1534.tar.zst; do
 		[ -e "$f" ] && { src=$(basename "$f"); break; }
 	done
-	[ -n "$src" ] || { echo "no source tarball in $1" >&2; return 1; }
+	[ -n "$src" ] || { err "no source tarball in $1"; return 1; }
 	(cd "$1" && sha256sum -- $TRACKED_FILES "$src" > SHA256SUMS)
 	echo "sealed $1/SHA256SUMS over: $TRACKED_FILES $src"
 }
@@ -70,29 +134,29 @@ done
 private_gate() {
 	local t ex stage rc=0 found=0
 	if [ -z "$PRIV" ]; then
-		echo "private gate: skipped (no private tree in this clone)"
+		say "private gate: skipped (no private tree in this clone)"
 		return 0
 	fi
 	# 1. the private test scripts, each with its own counters.
 	for t in "$PRIV"/tests/run-*.sh; do
 		[ -e "$t" ] || continue
 		found=1
-		echo "private gate: running ${t#"$ROOT"/}"
-		bash "$t" || { echo "private gate: FAILED: ${t#"$ROOT"/}" >&2; rc=1; }
+		say "private gate: running ${t#"$ROOT"/}"
+		bash "$t" || { err "private gate: ${t#"$ROOT"/} failed"; rc=1; }
 	done
-	[ "$found" -eq 1 ] || echo "private gate: no private test script found"
+	[ "$found" -eq 1 ] || say "private gate: no private test script found"
 	# 2. the export guard over the files a commit would carry: tracked and
 	# untracked-but-not-ignored files of the working tree, minus the private
 	# paths. Group P (private path names) is a hard failure here.
 	ex="$PRIV/export"
 	if [ ! -f "$ex/guard.sh" ]; then
-		echo "private gate: FAILED: the export guard is missing" >&2
+		err "private gate: the export guard is missing"
 		return 1
 	fi
 	stage=$(mktemp -d "${TMPDIR:-/tmp}/promote-gate.XXXXXX")
 	local -a specs=()
 	mapfile -t specs < <(bash -c 'source "$1/lib.sh"; kit_pathspecs exclude "$1/private-paths.txt"' _ "$ex")
-	[ "${#specs[@]}" -gt 0 ] || { echo "private gate: FAILED: no private path list" >&2; rm -rf "$stage"; return 1; }
+	[ "${#specs[@]}" -gt 0 ] || { err "private gate: no private path list"; rm -rf "$stage"; return 1; }
 	(
 		cd "$ROOT"
 		git ls-files -z --cached --others --exclude-standard --deduplicate -- . "${specs[@]}" \
@@ -100,9 +164,9 @@ private_gate() {
 				{ [ -e "$f" ] || [ -L "$f" ]; } && printf '%s\0' "$f"
 			done \
 			| tar --null --no-recursion -T - -cf - | tar -C "$stage" -xf -
-	) || { echo "private gate: FAILED: could not stage the files" >&2; rm -rf "$stage"; return 1; }
-	echo "private gate: scanning $(find "$stage" -type f | wc -l) files with the export guard"
-	bash "$ex/guard.sh" --conf "$ex" --strict tree "$stage" || { echo "private gate: FAILED: the export guard found hits" >&2; rc=1; }
+	) || { err "private gate: could not stage the files"; rm -rf "$stage"; return 1; }
+	say "private gate: scanning $(find "$stage" -type f | wc -l) files with the export guard"
+	bash "$ex/guard.sh" --conf "$ex" --strict tree "$stage" || { err "private gate: the export guard found hits"; rc=1; }
 	rm -rf "$stage"
 	return "$rc"
 }
@@ -114,7 +178,7 @@ fi
 
 if [ -n "$SEALED" ]; then
 	DIR="$ROOT/release/$SEALED"
-	[ -d "$DIR" ] || { echo "no such release: $DIR" >&2; exit 1; }
+	[ -d "$DIR" ] || { err "no such release: $DIR"; exit 1; }
 	seal "$DIR"
 	exit 0
 fi
@@ -130,28 +194,28 @@ SRCTAR="$ROOT/dist/${PKGNAME}-${PKGVER}.tar"
 
 # 1. release/<ver>/ is promoted, immutable history - never overwritten.
 if [ -e "$DEST" ]; then
-	echo "refusing: $DEST already exists - release history is not overwritten" >&2
+	err "$DEST already exists, and release history is not overwritten"
 	exit 1
 fi
 
 # 2. .SRCINFO must actually match the PKGBUILD being promoted.
 GENERATED_SRCINFO="$(cd "$ARCH" && makepkg --printsrcinfo)"
 if ! diff -q <(printf '%s\n' "$GENERATED_SRCINFO") "$ARCH/.SRCINFO" >/dev/null 2>&1; then
-	echo "refusing: makepkg --printsrcinfo differs from $ARCH/.SRCINFO - run make srcinfo first" >&2
+	err "makepkg --printsrcinfo differs from $ARCH/.SRCINFO; run make srcinfo first"
 	exit 1
 fi
 
 # 3. the built package for this exact version must already exist (it is not
 # copied; its checksum goes into STATUS.txt).
 if [ ! -e "$PKGFILE" ]; then
-	echo "refusing: $PKGFILE does not exist - build it first (make arch-pkg)" >&2
+	err "$PKGFILE does not exist; build it first with make arch-pkg"
 	exit 1
 fi
 
 # 3b. ...from the tarball the PKGBUILD pins, not from some other build.
 PINNED=$(sed -n "s/^sha256sums=('\([0-9a-f]*\)').*/\1/p" "$ARCH/PKGBUILD")
 if [ ! -e "$SRCTAR" ] || [ "$(sha256sum "$SRCTAR" | cut -d' ' -f1)" != "$PINNED" ]; then
-	echo "refusing: $SRCTAR is missing or does not match the PKGBUILD's sha256sums - run make arch-pkg" >&2
+	err "$SRCTAR is missing or does not match the PKGBUILD's sha256sums; run make arch-pkg"
 	exit 1
 fi
 
@@ -188,7 +252,7 @@ seal "$DEST"
 # so a rerun is possible; nothing else was touched.
 if ! private_gate; then
 	rm -rf "${DEST:?}"
-	echo "refusing: the private gate failed; removed $DEST" >&2
+	err "the private gate failed, so $DEST was removed again"
 	exit 1
 fi
 
@@ -222,4 +286,4 @@ prune_old_releases
 
 echo "promoted $PKGNAME $PKGVER-$PKGREL to $DEST"
 echo "fill in $DEST/STATUS.txt, then re-seal the checksums it is part of:"
-echo "  $HERE/promote-release.sh --seal $PKGVER"
+echo "    $HERE/promote-release.sh --seal $PKGVER"
