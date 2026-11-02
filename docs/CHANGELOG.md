@@ -2,9 +2,51 @@
 
 Versions have the form YYYYMMDD.NN (release date, NN counts releases that
 day); the last section summarises the earlier numbering. Only
-`release/20261026.01/` and `release/20261026.02/` are part of this repository;
+`release/20261026.02/` and `release/20261102.01/` are part of this repository;
 older release directories cited below were removed from it and the citations
 are history.
+
+## 20261102.01: audit findings of the text interfaces
+
+The module, the driver behaviour and the hook logic are unchanged from
+20261026.02. An audit of the text interfaces of the verifier, the development
+tools, the release script and the install text against the house HIG (text
+part) found several points; this release fixes them. References to the guide
+now name the house HIG, text part, in place of the earlier text guide. Built
+and tested in software; NOT RUN on hardware when this section was written
+(`docs/test-status.json`, `hw.runtime_20261102_01`).
+
+- `macbook91-audio-verify`: the help lines fit 80 columns (examples and file
+  names carry their description on the next line); messages no longer use a
+  dash as an aside (a comma, a colon or parentheses instead). Check rows,
+  verdict and exit status are unchanged.
+- Install text: the rollback command reads `sudo pacman -R
+  macbook91-cs4208-dkms` (it failed as typed without root). The upgrade text
+  is still the whole installation text; the scriptlet names that as a
+  deviation from TXT-8 and gives the reason.
+- `packaging/promote-release.sh`: its help says that every release directory
+  except the two newest is deleted (`rm -rf`), and the run names each
+  directory before it is removed. The status messages (`sealed`, the deletion,
+  `promoted`, the hint to seal) go to stderr, as every other message does; the
+  STATUS.txt template has no dash as an aside.
+- `macbook91-runner`: the recovery hints after a failed restore are error
+  messages (`macbook91-runner: error: ...`) with indented commands; the
+  wake-source hint is `echo NAME | sudo tee /proc/acpi/wakeup` for each source
+  and lists the wanted states. The runs go to `$XDG_STATE_HOME/macbook91-cs4208/runs/`
+  (default `~/.local/state`), under sudo to the state directory of the user
+  who ran sudo, whose home is read from the account database and need not be
+  under `/home`. `MACBOOK91_STATE_DIR` still names the home and wins. Help
+  examples show `tools/macbook91-runner`; durations read `30 s`.
+- `dev-audio-collect.sh`: the baseline goes below `$XDG_STATE_HOME`, under
+  sudo as for the runner; `--privileged` without root prints a warning with
+  the command to run before it collects. Help examples show the path
+  `tools/dev-audio-collect.sh` and fit 80 columns.
+- `kernel-series` (pacman helper): the message prefix it shares with another
+  package is a named deviation (FEH-2, NAM-1); the tests read the prefix.
+- Tests: eight new checks in section 7f of `tests/run-tests.sh` (the deletion
+  named in the help, no message on stdout, the recovery hints, the state
+  directory with and without `MACBOOK91_STATE_DIR`, the collector warning, the
+  80 columns, the rollback command).
 
 ## 20261026.02: text interfaces follow the house text HIG
 
