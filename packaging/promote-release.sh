@@ -31,6 +31,9 @@ PROG=promote-release.sh
 
 err() { printf '%s: error: %s\n' "$PROG" "$*" >&2; }
 say() { printf '%s\n' "$*" >&2; }
+# step MESSAGE: what the script did or is about to do. Every message goes to
+# stderr (KAN-1); this script has no result on stdout.
+step() { printf '%s: %s\n' "$PROG" "$*" >&2; }
 
 usage() {
 	cat <<'USAGE'
@@ -41,6 +44,9 @@ Usage: promote-release.sh
 Copy the release files into release/<pkgver>/ and seal them with SHA256SUMS.
 Where the maintainer's private tree is present, run its tests and the export
 guard as well. Nothing is committed, tagged, pushed or published.
+
+Once the new release is written, every older release/ directory except the
+newest two is deleted (rm -rf), and the run names each one before it goes.
 
 Examples:
   packaging/promote-release.sh
@@ -121,7 +127,7 @@ seal() { # seal DIR
 	done
 	[ -n "$src" ] || { err "no source tarball in $1"; return 1; }
 	(cd "$1" && sha256sum -- $TRACKED_FILES "$src" > SHA256SUMS)
-	echo "sealed $1/SHA256SUMS over: $TRACKED_FILES $src"
+	step "sealed $1/SHA256SUMS over: $TRACKED_FILES $src"
 }
 
 # The gate. The directory name is spelled with a bracket so that this shared
@@ -229,7 +235,7 @@ cp "$HERE/upstream.lock" "$DEST/upstream.lock"
 PKGSUM=$(sha256sum "$PKGFILE" | cut -d' ' -f1)
 
 cat > "$DEST/STATUS.txt" <<EOF
-$PKGNAME $PKGVER-$PKGREL — TODO: WITHDRAWN / CANDIDATE / etc.
+$PKGNAME $PKGVER-$PKGREL, TODO: WITHDRAWN / CANDIDATE / etc.
 
 TODO: fill in before this release is considered documented. See prior
 release/*/STATUS.txt for the level of detail expected: what changed, why,
@@ -263,7 +269,8 @@ fi
 # step that left thirteen releases without a .SRCINFO, so it is done here.
 #
 # Only directories strictly older than the two newest are removed, only after
-# the new one is fully written and sealed, and every removal is named.
+# the new one is fully written and sealed, and every removal is named before
+# it happens (GEF-5: it is a deletion, and the help says so).
 prune_old_releases() {
 	local keep=2 n=0 v
 	local vers=()
@@ -278,12 +285,12 @@ prune_old_releases() {
 		if [ "$n" -le "$keep" ]; then
 			continue
 		fi
+		step "deleting release/$v (only the $keep newest releases stay)"
 		rm -rf "${ROOT:?}/release/$v"
-		echo "pruned release/$v (kept the $keep newest)"
 	done < <(printf '%s\n' "${vers[@]}" | sort -V -r)
 }
 prune_old_releases
 
-echo "promoted $PKGNAME $PKGVER-$PKGREL to $DEST"
-echo "fill in $DEST/STATUS.txt, then re-seal the checksums it is part of:"
-echo "    $HERE/promote-release.sh --seal $PKGVER"
+step "promoted $PKGNAME $PKGVER-$PKGREL to $DEST"
+step "fill in $DEST/STATUS.txt, then seal the checksums it is part of:"
+say "    $HERE/promote-release.sh --seal $PKGVER"

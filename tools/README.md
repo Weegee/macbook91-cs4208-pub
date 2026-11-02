@@ -15,7 +15,7 @@ One place that says which tool to reach for.
 
 ## Command-line conventions
 
-Every tool here, and the scripts in `packaging/`, follows the house text HIG:
+Every tool here, and the scripts in `packaging/`, follows the house HIG, text part:
 `-h/--help` prints Usage first and a docs line last to stdout with exit 0,
 `-V/--version` prints `NAME VERSION` first, a wrong option or argument prints
 `NAME: error: ...` plus `Help: NAME --help` (and `Did you mean:` where one

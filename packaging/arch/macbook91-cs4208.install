@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
-# Text interface: the house text HIG (text-hig skill). pacman prints this text
+# Text interface: the house HIG, text part. pacman prints this text
 # as it is and cannot colour or prompt, so it is plain lines of at most 80
 # columns, with the commands to copy set apart by four spaces.
 post_install() {
@@ -37,7 +37,7 @@ What the WirePlumber rule does, and why it is not optional
 
 To roll back completely, remove the package and reboot:
 
-    pacman -R macbook91-cs4208-dkms
+    sudo pacman -R macbook91-cs4208-dkms
 
 Kernel series
 
@@ -57,7 +57,11 @@ CachyOS kernel as well.
 MSG
 }
 
-# Deliberately the same message: an upgrade shows what an installation shows.
-# (Replacing the package's early name macbook91-cs4208 is a removal plus an
-# installation, so post_install runs then; measured in an isolated pacman root.)
+# Abweichung von TXT-8: an upgrade repeats the whole installation text (about
+# 45 lines) instead of a short note. Kept on purpose: the card policy, the
+# series list and the rollback command are what a person needs after any
+# transaction that changes the module, and pacman cannot be asked what the
+# reader already knows. (Replacing the package's early name macbook91-cs4208
+# is a removal plus an installation, so post_install runs then; measured in an
+# isolated pacman root.)
 post_upgrade() { post_install; }

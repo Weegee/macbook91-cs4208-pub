@@ -47,11 +47,35 @@ TOOLS=$(dirname "$SELF")
 
 # ---------------------------------------------------------------- run state
 
-: "${MACBOOK91_STATE_DIR:=${SUDO_USER:+/home/$SUDO_USER}}"
-if [ -z "${MACBOOK91_STATE_DIR:-}" ] || [ "$MACBOOK91_STATE_DIR" = "" ]; then
-	MACBOOK91_STATE_DIR="$HOME"
-fi
-STATE_ROOT="$MACBOOK91_STATE_DIR/.local/state/macbook91-cs4208"
+# The state directory follows the XDG rule (KON-1): $XDG_STATE_HOME, else
+# ~/.local/state, then macbook91-cs4208 below it, the directory
+# macbook91-audio-verify and dev-audio-collect.sh write to as well. Under sudo
+# the home is the invoking user's, read from the account database because it
+# need not be under /home; root's own state directory would hide a run from
+# that user. MACBOOK91_STATE_DIR, older than this rule, names the home itself
+# and wins over XDG_STATE_HOME (STA-1).
+state_home() {
+	local home=$HOME
+	if [ -n "${MACBOOK91_STATE_DIR:-}" ]; then
+		printf '%s/.local/state' "$MACBOOK91_STATE_DIR"
+		return 0
+	fi
+	if [ -n "${XDG_STATE_HOME:-}" ]; then
+		printf '%s' "$XDG_STATE_HOME"
+		return 0
+	fi
+	if [ -n "${SUDO_USER:-}" ] && [ "$(id -u)" = 0 ]; then
+		home=$(getent passwd "$SUDO_USER" | cut -d: -f6) || home=""
+		if [ -z "$home" ]; then
+			printf 'macbook91-runner: error: cannot find the home of %s\n' "$SUDO_USER" >&2
+			printf '  Set MACBOOK91_STATE_DIR to the home that should hold the runs\n' >&2
+			return 1
+		fi
+	fi
+	printf '%s/.local/state' "$home"
+}
+STATE_HOME=$(state_home) || exit 3
+STATE_ROOT="$STATE_HOME/macbook91-cs4208"
 RUNS="$STATE_ROOT/runs"
 
 RUNID=""
@@ -90,7 +114,7 @@ JACKSTREAM_FIFO=""
 log()  { printf '%s\n' "$*" | tee -a "$REPORT" ; }
 logq() { printf '%s\n' "$*" >>"$REPORT" ; }
 hr()   { log "" ; log "== $* ==" ; }
-# Text interface: the house text HIG (text-hig skill). Named deviation:
+# Text interface: the house HIG, text part. Named deviation:
 # Abweichung von KAN-3: the exit status is the verdict, so 2 means BLOCKED and
 # 4 INCOMPLETE; usage and runtime errors end with 3. The verdict codes are the
 # interface the run reports and the notes already use, so they stay (STA-1).
@@ -110,9 +134,9 @@ Runs MacBook9,1 audio measurements. Every run lands in one directory that
 survives a reboot.
 
 Examples:
-  macbook91-runner selfcheck          check the tool itself; touches no hardware
-  sudo macbook91-runner probe         measure the amplifier transport
-  macbook91-runner report             print the last stored run
+  tools/macbook91-runner selfcheck    check the tool itself; touches no hardware
+  sudo tools/macbook91-runner probe   measure the amplifier transport
+  tools/macbook91-runner report       print the last stored run
 
 Commands:
   selfcheck          unprivileged; no hardware is touched
@@ -139,12 +163,14 @@ Options:
   -V, --version      show the version
 
 Environment:
-  MACBOOK91_STATE_DIR   base of the state directory (default: the home of the
-                        user who ran sudo, else \$HOME)
+  XDG_STATE_HOME        base of the state directory (default ~/.local/state;
+                        under sudo, in the home of the user who ran sudo)
+  MACBOOK91_STATE_DIR   home whose .local/state holds the runs; wins over
+                        XDG_STATE_HOME
 
 Files:
-  ~/.local/state/macbook91-cs4208/runs/RUNID/   report.txt, results.json and
-                                                state.json of one run
+  \$XDG_STATE_HOME/macbook91-cs4208/runs/RUNID/
+      report.txt, results.json and state.json of one run
 
 Exit status:
   0    PASS
@@ -299,13 +325,10 @@ restore_units() {
 	done
 	if [ ${#bad[@]} -gt 0 ]; then
 		UNITS_RESTORED=FAILED
-		cat >&2 <<-EOF
-
-		*** these user units are still masked: ${bad[*]}
-		*** recover with, as your normal user, no sudo:
-		***   systemctl --user unmask ${bad[*]}
-		***   systemctl --user start pipewire.socket pipewire.service wireplumber.service
-		EOF
+		printf 'macbook91-runner: error: these user units are still masked: %s\n' "${bad[*]}" >&2
+		printf '  Recover as your normal user, without sudo:\n' >&2
+		printf '    systemctl --user unmask %s\n' "${bad[*]}" >&2
+		printf '    systemctl --user start pipewire.socket pipewire.service wireplumber.service\n' >&2
 		return 1
 	fi
 	UNITS_RESTORED=ok
@@ -350,7 +373,7 @@ acpi_wake_disarm() {
 }
 
 acpi_wake_restore() {
-	local n cur bad=()
+	local n cur want="" bad=()
 	[ ${#ACPI_WAKE_PRIOR[@]} -eq 0 ] && return 0
 	for n in "${!ACPI_WAKE_PRIOR[@]}"; do
 		cur=$(acpi_wake_state "$n")
@@ -361,12 +384,11 @@ acpi_wake_restore() {
 	done
 	if [ ${#bad[@]} -gt 0 ]; then
 		ACPI_WAKE_RESTORED=FAILED
-		cat >&2 <<-EOF
-
-		*** these ACPI wake sources are NOT back to how they were found: ${bad[*]}
-		*** /proc/acpi/wakeup is a toggle; restore with, as root:
-		*** $(for n in "${bad[@]}"; do printf '  echo %s > /proc/acpi/wakeup   # want %s\n' "$n" "${ACPI_WAKE_PRIOR[$n]}"; done)
-		EOF
+		printf 'macbook91-runner: error: these ACPI wake sources are NOT back to how they were found: %s\n' "${bad[*]}" >&2
+		for n in "${bad[@]}"; do want+="${want:+, }$n ${ACPI_WAKE_PRIOR[$n]}"; done
+		printf '  /proc/acpi/wakeup is a toggle. Wanted: %s\n' "$want" >&2
+		printf '  Check with cat /proc/acpi/wakeup, then flip each source that differs:\n' >&2
+		for n in "${bad[@]}"; do printf '    echo %s | sudo tee /proc/acpi/wakeup\n' "$n" >&2; done
 		return 1
 	fi
 	ACPI_WAKE_RESTORED=ok
@@ -562,7 +584,7 @@ check_identity() {
 	[ "$DMI_PRODUCT" = "MacBook9,1" ] || { ok=FAIL; why="DMI is '$DMI_PRODUCT'"; }
 	[ "$CODEC_VENDOR" = "0x10134208" ] || { ok=FAIL; why="$why codec vendor $CODEC_VENDOR"; }
 	result "identity.target[$phase]" "$ok" \
-		"card $CARD, $DMI_VENDOR $DMI_PRODUCT, codec $CODEC_VENDOR ssid $CODEC_SSID${why:+ - $why}" m
+		"card $CARD, $DMI_VENDOR $DMI_PRODUCT, codec $CODEC_VENDOR ssid $CODEC_SSID${why:+: $why}" m
 
 	# The A1534 path is only active when the speaker PCM offers four channels.
 	# hw:0,0 existing proves nothing; an earlier build learned that the hard way.
@@ -571,7 +593,7 @@ check_identity() {
 		result "identity.a1534_path[$phase]" PASS "speaker PCM offers 4 channels" m
 	elif [ -n "$chmax" ]; then
 		result "identity.a1534_path[$phase]" FAIL \
-			"speaker PCM offers $chmax channels, not 4 - the driver is on the generic path" m
+			"speaker PCM offers $chmax channels, not 4: the driver is on the generic path" m
 	else
 		result "identity.a1534_path[$phase]" BLOCKED "could not read the PCM channel count" m
 	fi
@@ -583,7 +605,7 @@ check_identity() {
 			"loaded $LOADED_VER (srcversion $LOADED_SRCVER) matches the module on disk" m
 	else
 		result "identity.module[$phase]" FAIL \
-			"loaded $LOADED_VER ($LOADED_SRCVER) but the module on disk is $DISK_VER ($DISK_SRCVER) - the running code is not what is installed" m
+			"loaded $LOADED_VER ($LOADED_SRCVER) but the module on disk is $DISK_VER ($DISK_SRCVER: the running code is not what is installed" m
 	fi
 }
 
@@ -639,7 +661,7 @@ cmd_selfcheck() {
 }
 
 cmd_preflight() {
-	hr "preflight - what can be known without root"
+	hr "preflight: what can be known without root"
 	check_identity preflight || true
 	logq "--- uname ---"; uname -a >>"$REPORT"
 	logq "--- package ---"
@@ -661,7 +683,7 @@ cmd_preflight() {
 	local sus; sus=$(cat /sys/power/mem_sleep 2>/dev/null || echo '?')
 	case $sus in
 	*"[deep]"*) result preflight.sleep_mode PASS "mem_sleep = $sus" ;;
-	*) result preflight.sleep_mode FAIL "mem_sleep = $sus - deep is not selected" ;;
+	*) result preflight.sleep_mode FAIL "mem_sleep = $sus, deep is not selected" ;;
 	esac
 	# Module parameter actually in force, not the one we assume.
 	local amp; amp=$(cat /sys/module/snd_hda_codec_cs420x/parameters/a1534_amp 2>/dev/null || echo '?')
@@ -763,7 +785,7 @@ for k,v in d["tests"].items():
 			fi
 		else
 			result stream.running BLOCKED \
-				"could not start a 4-channel stream; PCM state '$(pcm_state)' - something else holds the device" m
+				"could not start a 4-channel stream; PCM state '$(pcm_state)': something else holds the device" m
 			result state.captured_streaming NOT_RUN "no stream to capture" m
 		fi
 		stop_silence
@@ -960,7 +982,7 @@ cmd_jackstream() {
 		if ! kill -0 "$JACKSTREAM_CAP_PID" 2>/dev/null; then
 			capok=FAIL; capdetail="capture process died: $(tail -3 "$caperr" 2>/dev/null)"
 		elif [ "$sizeafter" -le "$sizebefore" ]; then
-			capok=FAIL; capdetail="no growth (${sizebefore}->${sizeafter}) - short read or stall"
+			capok=FAIL; capdetail="no growth (${sizebefore}->${sizeafter}): short read or stall"
 		elif grep -qiE 'overrun|broken pipe|EPIPE|xrun' "$caperr" 2>/dev/null; then
 			capok=FAIL; capdetail="$(grep -iE 'overrun|broken pipe|EPIPE|xrun' "$caperr" | tail -1)"
 		fi
@@ -1067,9 +1089,9 @@ print("%.1f" % ((b["clocks"]["boottime"]-a["clocks"]["boottime"])
                 -(b["clocks"]["monotonic"]-a["clocks"]["monotonic"])))
 ' "$RUNDIR/wake-before.json" "$RUNDIR/wake-after.json")
 		if python3 -c "import sys; sys.exit(0 if float(sys.argv[1])>60 else 1)" "$slept"; then
-			result wake.measured PASS "stayed suspended ${slept}s - nothing woke it early" m
+			result wake.measured PASS "stayed suspended for ${slept} s, nothing woke it early" m
 		elif python3 -c "import sys; sys.exit(0 if float(sys.argv[1])>0.5 else 1)" "$slept"; then
-			result wake.measured FAIL "came back after ${slept}s - something woke it" m
+			result wake.measured FAIL "came back after ${slept} s, something woke it" m
 		else
 			result wake.measured BLOCKED "no suspend happened at all" m
 		fi

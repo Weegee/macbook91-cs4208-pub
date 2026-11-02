@@ -52,7 +52,7 @@ KERNEL_SERIES=/usr/lib/$PKG/kernel-series
 
 # --- command line -----------------------------------------------------------
 #
-# The text interface follows the house text HIG (the text-hig skill). Named
+# The text interface follows the house HIG, text part. Named
 # deviations, kept on purpose:
 #   Abweichung von EIN-1: without a terminal the listening checks are not a
 #     usage error. They are reported as SKIPPED and the software checks still
@@ -79,8 +79,10 @@ software checks first, then short listening checks. Prints one PASS or FAIL
 verdict and, on FAIL, writes one diagnostic archive.
 
 Examples:
-  $PROG                full check; asks before it plays or records
-  $PROG --no-sound     software checks only; plays and records nothing
+  $PROG
+      full check; asks before it plays or records
+  $PROG --no-sound
+      software checks only; plays and records nothing
 
 Options:
   -y, --yes          answer every question with yes (the tones still play;
@@ -95,10 +97,12 @@ Options:
 Environment:
   MACBOOK91_AUDIO_VERIFY_COLOR   auto, always or never (default auto)
   NO_COLOR                       not empty: no colour
-  XDG_STATE_HOME                 base of the state directory (default ~/.local/state)
+  XDG_STATE_HOME                 base of the state directory
+                                 (default ~/.local/state)
 
 Files:
-  \$XDG_STATE_HOME/$PKG/diagnostics   where the failure archive is kept
+  \$XDG_STATE_HOME/$PKG/diagnostics
+      where the failure archive is kept
 
 Exit status:
   0    no check failed (the last line says if listening checks were skipped)
@@ -412,7 +416,7 @@ fi
 # every later check would only say so less clearly.
 KVER=$(uname -r)
 if [ ! -x "$KERNEL_SERIES" ]; then
-	emit FAIL "kernel series supported" "$KERNEL_SERIES is missing - reinstall $PACMAN_PKG"
+	emit FAIL "kernel series supported" "$KERNEL_SERIES is missing, reinstall $PACMAN_PKG"
 elif SERIES_MSG=$("$KERNEL_SERIES" --kernel "$KVER" 2>&1); then
 	emit PASS "kernel series supported" "$SERIES_MSG"
 else
@@ -436,7 +440,7 @@ if [ -n "$CODEC_FILE" ]; then
 		emit PASS "codec subsystem id" "0x$SSID"
 	elif [ "$SSID" = "$CODEC_SSID_DEGRADED" ]; then
 		emit PASS "codec subsystem id" \
-		     "0x$SSID - the subsystem id was lost to a suspend; this is identity, not function"
+		     "0x$SSID, the subsystem id was lost to a suspend; this is identity, not function"
 	else
 		emit FAIL "codec subsystem id" "got 0x$SSID, want 0x$CODEC_SSID_WANT or 0x$CODEC_SSID_DEGRADED"
 	fi
@@ -470,7 +474,7 @@ if [ -d "$SYSMOD" ]; then
 		:
 	elif [ "$LOADED_SRC" != "$DISK_SRC" ]; then
 		emit FAIL "loaded vs on-disk module" \
-		     "loaded $LOADED_VER but disk has $DISK_VER - reboot needed to load the new module"
+		     "loaded $LOADED_VER but disk has $DISK_VER: reboot needed to load the new module"
 	elif [ "$LOADED_VER" != "$DISK_VER" ]; then
 		emit PASS "loaded vs on-disk module" \
 		     "same code ($LOADED_SRC); package version differs ($LOADED_VER -> $DISK_VER), no reboot needed"
@@ -512,7 +516,7 @@ if [ -n "$CODEC_FILE" ]; then
 		     "$(printf '%s' "$CVT_BLOCK" | sed -n 's/.*Device: name=\("[^"]*"\).*/\1/p' | head -1)"
 	else
 		emit FAIL "speaker PCM bound to converter $SPEAKER_DAC" \
-		     "no PCM on $SPEAKER_DAC - the generic path is in use, speakers cannot receive audio"
+		     "no PCM on $SPEAKER_DAC: the generic path is in use, speakers cannot receive audio"
 	fi
 
 	# A deep suspend powers this codec down and loses configuration the
@@ -524,7 +528,7 @@ if [ -n "$CODEC_FILE" ]; then
 		| sed -n 's/^  Pin Default \(0x[0-9a-f]*\).*/\1/p')
 	if [ "$PIN1D_CFG" = "0x901600f0" ]; then
 		emit FAIL "speaker configuration present" \
-		     "pin $SPEAKER_PIN reads the firmware value $PIN1D_CFG - the firmware state was not restored on this resume. a1534_restore=1 (the default) is the mechanism meant to restore it; check the kernel log for the 'A1534: pin 0x1d after restore' line."
+		     "pin $SPEAKER_PIN reads the firmware value $PIN1D_CFG: the firmware state was not restored on this resume. a1534_restore=1 (the default) is the mechanism meant to restore it; check the kernel log for the 'A1534: pin 0x1d after restore' line."
 	elif [ -n "$PIN1D_CFG" ]; then
 		emit PASS "speaker configuration present" "pin $SPEAKER_PIN cfg $PIN1D_CFG"
 	fi
@@ -572,7 +576,7 @@ if [ -n "$CODEC_FILE" ]; then
 				     "Pin-ctls $HP_PINCTL (OUT HP), jack plugged; speaker pin $SPEAKER_PIN ${PINCTL:-unknown} as designed" ;;
 			*)
 				emit FAIL "headphone pin $HP_PIN driving" \
-				     "headphones are plugged but pin $HP_PIN reads Pin-ctls ${HP_PINCTL:-unknown}, want 0xc0 - the jack event did not reach the driver, or the switch to converter 0x02 did not complete" ;;
+				     "headphones are plugged but pin $HP_PIN reads Pin-ctls ${HP_PINCTL:-unknown}, want 0xc0: the jack event did not reach the driver, or the switch to converter 0x02 did not complete" ;;
 		esac
 	elif [ "$PINCTL" = "0x40" ]; then
 		emit PASS "speaker pin $SPEAKER_PIN enabled" "Pin-ctls $PINCTL (OUT), jack empty"
@@ -592,7 +596,7 @@ elif contains "$KLOG" 'MacBook9,1 (A1534) detected'; then
 	     "$(printf '%s' "$KLOG" | sed -n 's/.*\(CS4208: MacBook9,1.*\)/\1/p' | head -1)"
 else
 	emit FAIL "A1534 gate marker in kernel log" \
-	     "no 'MacBook9,1 (A1534) detected' marker - the generic path is in use"
+	     "no 'MacBook9,1 (A1534) detected' marker: the generic path is in use"
 fi
 
 if [ -z "$KLOG" ]; then
@@ -637,7 +641,7 @@ if have aplay; then
 		emit PASS "speaker PCM offers 4 channels" "$PCM_HW channels: $CAPS"
 	else
 		emit FAIL "speaker PCM offers 4 channels" \
-		     "$PCM_HW channels: $CAPS - the TDM amplifier slots cannot be fed"
+		     "$PCM_HW channels: $CAPS (the TDM amplifier slots cannot be fed)"
 	fi
 fi
 
@@ -675,7 +679,7 @@ if have wpctl && wpctl status >/dev/null 2>&1; then
 			emit PASS "software volume active on the card" "api.alsa.soft-mixer = true"
 		else
 			emit FAIL "software volume active on the card" \
-			     "api.alsa.soft-mixer is NOT set - the volume slider will not attenuate the speakers and output may be dangerously loud. Check $WP_DROPIN and run: systemctl --user restart wireplumber"
+			     "api.alsa.soft-mixer is NOT set: the volume slider will not attenuate the speakers and output may be dangerously loud. Check $WP_DROPIN and run: systemctl --user restart wireplumber"
 		fi
 
 		# The profile set. This card has exactly one analog output port, and
@@ -706,11 +710,11 @@ if have wpctl && wpctl status >/dev/null 2>&1; then
 				emit PASS "ACP path's include is present" "$ACPINC"
 			else
 				emit FAIL "ACP path's include is present" \
-				     "$ACPPATH includes $ACPINC, which is not readable - that file belongs to alsa-card-profiles, so a rename or move there breaks this card's only output port. Reinstall alsa-card-profiles, or update the .include in $ACPPATH to where the file now lives."
+				     "$ACPPATH includes $ACPINC, which is not readable: that file belongs to alsa-card-profiles, so a rename or move there breaks this card's only output port. Reinstall alsa-card-profiles, or update the .include in $ACPPATH to where the file now lives."
 			fi
 		else
 			emit FAIL "ACP profile set selected" \
-			     "device.profile-set is NOT set - the card is on the stock ACP profile set, whose only analog output port goes unavailable whenever headphones are plugged, leaving no sink at all. Check $WP_DROPIN and run: systemctl --user restart wireplumber"
+			     "device.profile-set is NOT set: the card is on the stock ACP profile set, whose only analog output port goes unavailable whenever headphones are plugged, leaving no sink at all. Check $WP_DROPIN and run: systemctl --user restart wireplumber"
 		fi
 	fi
 
@@ -728,7 +732,7 @@ if have wpctl && wpctl status >/dev/null 2>&1; then
 				     "$ACTIVE_PROFILE"
 			else
 				emit FAIL "analog profile survives a plugged jack" \
-				     "headphones are plugged and the card is on '${ACTIVE_PROFILE:-unknown}', not $ANALOG_PROFILE - this is the failure the profile set exists to prevent, and there is no sink for the internal audio path in this state"
+				     "headphones are plugged and the card is on '${ACTIVE_PROFILE:-unknown}', not $ANALOG_PROFILE: this is the failure the profile set exists to prevent, and there is no sink for the internal audio path in this state"
 			fi
 		else
 			emit SKIPPED "analog profile survives a plugged jack" \
@@ -847,9 +851,9 @@ else
 			if awk -v p="${PEAK:-0}" 'BEGIN{exit !(p>0.005 && p<0.99)}'; then
 				emit PASS "microphone signal" "peak amplitude $PEAK"
 			elif awk -v p="${PEAK:-0}" 'BEGIN{exit !(p<=0.005)}'; then
-				emit FAIL "microphone signal" "peak amplitude ${PEAK:-0} - null signal"
+				emit FAIL "microphone signal" "peak amplitude ${PEAK:-0}, null signal"
 			else
-				emit FAIL "microphone signal" "peak amplitude $PEAK - clipping"
+				emit FAIL "microphone signal" "peak amplitude $PEAK, clipping"
 			fi
 		fi
 		rm -f "$REC"   # never archived, never kept; also covered by the exit trap

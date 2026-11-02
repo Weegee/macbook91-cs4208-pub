@@ -8,7 +8,7 @@
 # its own output directory, never loads/unloads modules, never changes mixer,
 # PipeWire or power settings, and never records audio.
 #
-# The text interface follows the house text HIG (text-hig skill). The files in
+# The text interface follows the house HIG, text part. The files in
 # the baseline directory are evidence, not terminal output: their "###" headers
 # and "(absent)" markers stay as they are, so older and newer baselines compare.
 #
@@ -29,8 +29,9 @@ timestamped directory. Read-only: it writes nowhere else, loads and unloads no
 module, changes no mixer, PipeWire or power setting, and records no audio.
 
 Examples:
-  $PROG                       collect without root
-  sudo $PROG --privileged     also run the small set of root-only probes
+  tools/$PROG        collect without root
+  sudo tools/$PROG --privileged
+                              also run the small set of root-only probes
 
 Options:
   -o, --output DIR   parent directory for the timestamped baseline (default:
@@ -43,7 +44,8 @@ Options:
   -V, --version      show the version
 
 Environment:
-  XDG_STATE_HOME   base of the state directory (default ~/.local/state)
+  XDG_STATE_HOME   base of the state directory (default ~/.local/state; under
+                   sudo, in the home of the user who ran sudo)
 
 Files:
   DIR/TIMESTAMP/   the baseline: one NN-name.txt file per topic, SHA256SUMS
@@ -88,9 +90,16 @@ repo_root() {
 }
 
 ROOT="$(repo_root)"
+# --privileged without root: say so now, not only inside the baseline (ERF-2).
+if [ "$PRIVILEGED" = 1 ] && [ "$(id -u)" != 0 ]; then
+	printf '%s: warning: --privileged needs root; the root-only probes are recorded as SKIPPED\n' "$PROG" >&2
+	printf '  Run: sudo tools/%s --privileged\n' "$PROG" >&2
+fi
 # Under sudo (--privileged) the invoking user's state directory, as
 # macbook91-runner does: root's own would hide the baseline from that user
-# and from the recovery archive.
+# and from the recovery archive. $XDG_STATE_HOME (KON-1) wins when sudo kept
+# it; otherwise the home comes from the account database, since it need not
+# be under /home.
 SUDO_OWNER=""
 CHOWN_ROOT=""
 if [ -n "${SUDO_USER:-}" ] && [ "$(id -u)" = 0 ]; then
@@ -98,7 +107,12 @@ if [ -n "${SUDO_USER:-}" ] && [ "$(id -u)" = 0 ]; then
 fi
 if [ -z "$OUTPARENT" ]; then
 	if [ -n "$SUDO_OWNER" ]; then
-		CHOWN_ROOT="/home/$SUDO_OWNER/.local/state/macbook91-cs4208"
+		SUDO_HOME=$(getent passwd "$SUDO_OWNER" | cut -d: -f6)
+		if [ -z "${XDG_STATE_HOME:-}" ] && [ -z "$SUDO_HOME" ]; then
+			printf '%s: error: cannot find the home of %s\n  Pass -o DIR\n' "$PROG" "$SUDO_OWNER" >&2
+			exit 1
+		fi
+		CHOWN_ROOT="${XDG_STATE_HOME:-$SUDO_HOME/.local/state}/macbook91-cs4208"
 		OUTPARENT="$CHOWN_ROOT/baselines"
 	else
 		OUTPARENT="${XDG_STATE_HOME:-$HOME/.local/state}/macbook91-cs4208/baselines"

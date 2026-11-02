@@ -170,8 +170,9 @@ tools/macbook91-runner diff             # two captures, field by field
 tools/macbook91-runner wake             # what wakes the machine early
 ```
 
-Every run lands in one directory under `~/.local/state/macbook91-cs4208/runs/`
-that survives a reboot, with a human report and a machine-readable result.
+Every run lands in one directory under `$XDG_STATE_HOME/macbook91-cs4208/runs/`
+(by default `~/.local/state/macbook91-cs4208/runs/`) that survives a reboot,
+with a human report and a machine-readable result.
 Each test reports PASS, FAIL, BLOCKED, NOT_RUN or SKIPPED; a mandatory test
 that is never reached forces the verdict to INCOMPLETE rather than disappearing.
 

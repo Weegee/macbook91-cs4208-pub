@@ -27,12 +27,16 @@
 #
 # Exit 2: bad arguments, or no readable list.
 #
-# Text interface (house text HIG). Named deviations, kept on purpose:
+# Text interface (house HIG, text part). Named deviations, kept on purpose:
 #   Abweichung von FEH-2, TYP-1: --hook writes pacman hook output, which
 #     follows the makepkg convention "==> WARNING:" on stdout. The test suite
 #     pins that header.
 #   Abweichung von KAN-3: --kernel exits 1 for "not supported", like grep:
 #     0 yes, 1 no, 2 error.
+#   Abweichung von FEH-2, NAM-1: messages start with "kernel-series:", the
+#     same name as the helper of macbook91-wireless. The file is installed to
+#     /usr/lib/macbook91-cs4208/, not to PATH, so no command collides; the
+#     test suite reads the "kernel-series: error:" prefix (section 7f).
 set -u
 
 SERIES_FILE=/usr/src/macbook91-cs4208-@PKGVER@/kheaders/KERNEL-SERIES

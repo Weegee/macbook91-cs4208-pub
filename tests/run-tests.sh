@@ -3054,6 +3054,81 @@ if tags=$("$PKG/fetch-upstream.sh" --all --print-tag 2>/dev/null) && [ -n "$tags
 else
 	no "fetch-upstream.sh --print-tag still prints plain tags only" "$tags"
 fi
+
+# The 2026-11-02 audit of the text interfaces (house HIG, text part).
+# GEF-5: the release pruning is a deletion, and the help says so.
+if "$PKG/promote-release.sh" --help | grep -q 'deleted (rm -rf)'; then
+	ok "promote-release.sh --help says that older release directories are deleted"
+else
+	no "promote-release.sh --help says that older release directories are deleted" \
+	   "the pruning is an rm -rf and must be named"
+fi
+# KAN-1: this script has no result on standard output, so it never echoes.
+if ! grep -q '^[[:space:]]*echo ' "$PKG/promote-release.sh"; then
+	ok "promote-release.sh sends every message to standard error"
+else
+	no "promote-release.sh sends every message to standard error" \
+	   "$(grep -n '^[[:space:]]*echo ' "$PKG/promote-release.sh" | head -3)"
+fi
+# FEH-2, ERF-3: the recovery hints are error messages with indented commands,
+# not blocks of asterisks, and the wake-source hint can be copied.
+if ! grep -q '^[[:space:]]*\*\*\*' "$TOOLS/macbook91-runner" \
+   && grep -q "printf '    echo %s | sudo tee /proc/acpi/wakeup" "$TOOLS/macbook91-runner"; then
+	ok "the runner's recovery hints are error messages with commands to copy"
+else
+	no "the runner's recovery hints are error messages with commands to copy" \
+	   "an asterisk block remains, or the wake-source command is not a command"
+fi
+# KON-1: the state directory is $XDG_STATE_HOME/macbook91-cs4208, and the older
+# MACBOOK91_STATE_DIR (a home directory) still wins over it. Each run gets a
+# scratch directory, so the suite adds no run to the user's own state.
+XSTATE=$(mktemp -d)
+mkdir "$XSTATE/h" "$XSTATE/xdg"
+env -u MACBOOK91_STATE_DIR -u SUDO_USER XDG_STATE_HOME="$XSTATE/xdg" "$RUNNER" selfcheck >/dev/null 2>&1
+if compgen -G "$XSTATE/xdg/macbook91-cs4208/runs/*/report.txt" >/dev/null; then
+	ok "macbook91-runner writes its runs below XDG_STATE_HOME"
+else
+	no "macbook91-runner writes its runs below XDG_STATE_HOME" "$(find "$XSTATE" -maxdepth 3 | head -5)"
+fi
+env -u SUDO_USER MACBOOK91_STATE_DIR="$XSTATE/h" XDG_STATE_HOME="$XSTATE/xdg" "$RUNNER" selfcheck >/dev/null 2>&1
+if compgen -G "$XSTATE/h/.local/state/macbook91-cs4208/runs/*/report.txt" >/dev/null; then
+	ok "MACBOOK91_STATE_DIR still wins over XDG_STATE_HOME"
+else
+	no "MACBOOK91_STATE_DIR still wins over XDG_STATE_HOME" "$(find "$XSTATE" -maxdepth 5 | head -5)"
+fi
+rm -rf "$XSTATE"
+# ERF-2: --privileged without root says so on standard error before it collects.
+# The unwritable -o directory ends the run right after that message.
+if [ "$(id -u)" = 0 ]; then
+	blocked "dev-audio-collect.sh --privileged without root warns on standard error" "the suite runs as root"
+else
+	err=$("$TOOLS/dev-audio-collect.sh" --privileged -o /proc/no-such-dir </dev/null 2>&1 >/dev/null)
+	if grep -q '^dev-audio-collect.sh: warning: --privileged needs root' <<<"$err" \
+	   && grep -qx '  Run: sudo tools/dev-audio-collect.sh --privileged' <<<"$err"; then
+		ok "dev-audio-collect.sh --privileged without root warns on standard error"
+	else
+		no "dev-audio-collect.sh --privileged without root warns on standard error" "$(head -c 200 <<<"$err")"
+	fi
+fi
+# TYP-2: no line of these helps is wider than 80 columns.
+wide=""
+for t in "$TOOLS/macbook91-audio-verify" "$TOOLS/macbook91-runner" "$TOOLS/dev-audio-collect.sh" \
+         "$PKG/promote-release.sh" "$SRC/contrib/pacman/kernel-series"; do
+	w=$("$t" --help 2>/dev/null | awk 'length > 80 { n++ } END { print n + 0 }')
+	[ "$w" -eq 0 ] || wide="$wide ${t##*/}($w)"
+done
+if [ -z "$wide" ]; then
+	ok "the helps of the verifier, runner, collector, promote script and kernel-series fit 80 columns"
+else
+	no "the helps of the verifier, runner, collector, promote script and kernel-series fit 80 columns" \
+	   "lines over 80 columns in:$wide"
+fi
+# ERF-3: the rollback command in the install text is one that works as typed.
+if grep -qx '    sudo pacman -R macbook91-cs4208-dkms' "$PKG/arch/macbook91-cs4208.install"; then
+	ok "the install text gives the rollback command with sudo"
+else
+	no "the install text gives the rollback command with sudo" "pacman -R needs root"
+fi
 rm -rf "$HIGT"
 
 echo "== 8. Hardware-only gates =="
