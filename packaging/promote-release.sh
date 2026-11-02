@@ -143,12 +143,13 @@ private_gate() {
 		say "private gate: skipped (no private tree in this clone)"
 		return 0
 	fi
-	# 1. the private test scripts, each with its own counters.
+	# 1. the private test scripts, each with its own counters. Their report is
+	# a message of this script, so it goes to stderr (KAN-1).
 	for t in "$PRIV"/tests/run-*.sh; do
 		[ -e "$t" ] || continue
 		found=1
 		say "private gate: running ${t#"$ROOT"/}"
-		bash "$t" || { err "private gate: ${t#"$ROOT"/} failed"; rc=1; }
+		bash "$t" >&2 || { err "private gate: ${t#"$ROOT"/} failed"; rc=1; }
 	done
 	[ "$found" -eq 1 ] || say "private gate: no private test script found"
 	# 2. the export guard over the files a commit would carry: tracked and

@@ -138,7 +138,7 @@ exactly why headphones always survived a resume.
 ```
 src/cs420x-a1534/   the module: mainline cs420x.c plus a gated A1534 path
 tools/              measurement tools, one entry point: macbook91-runner
-tests/              328 hermetic tests, no root, no hardware, no sound
+tests/              336 hermetic tests, no root, no hardware, no sound
 packaging/          the fetcher, its lockfile, the tarball and release scripts
 packaging/arch/     PKGBUILD, .SRCINFO and the install scriptlet
 Makefile, VERSION   dist, install and package targets; the version
@@ -151,8 +151,11 @@ docs/               the investigation, including everything that was wrong
 
 The test count above is that of a host with the replacement module loaded.
 A host that still runs the stock codec runs one more test and blocks the two
-checks that compare the recorded totals, so it would report 252 passed, 0
-failed, 10 blocked. That figure is derived; it was not run on such a host. A suite started with SIGINT ignored, as a background job does, gives
+checks that compare the recorded totals, so it reports 335 passed, 0 failed,
+10 blocked. That figure was measured on 2026-11-02 on a development host that
+runs the stock codec; the count above is derived from it and was not run on a
+host with the module loaded. A suite started with SIGINT ignored, as a
+background job does, gives
 the same result as one started in the foreground.
 
 `docs/CLAIMS-AUDIT.md` is worth reading before trusting anything here: it lists

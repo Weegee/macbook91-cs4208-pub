@@ -1,0 +1,52 @@
+macbook91-cs4208-dkms 20261102.01-1 - RELEASE (tag v20261102.01; audit findings of the text interfaces; the module is unchanged; hardware NOT RUN)
+
+What changed: the full list is in docs/CHANGELOG.md.
+- macbook91-audio-verify: help lines fit 80 columns, messages use no dash as an aside. Check rows,
+  verdict and exit status are the same.
+- The install text gives the rollback command as "sudo pacman -R macbook91-cs4208-dkms". The
+  upgrade text is still the whole installation text; the scriptlet names that as a deviation from
+  TXT-8.
+- promote-release.sh says in its help that every release directory but the two newest is deleted,
+  names each one before it goes, and sends its status messages to stderr.
+- The development tools (not shipped): macbook91-runner reports a failed restore as
+  "macbook91-runner: error: ..." with indented commands, and keeps its runs below
+  $XDG_STATE_HOME (under sudo: the state directory of the user who ran sudo, home read from the
+  account database); dev-audio-collect.sh does the same and warns when --privileged runs without
+  root; help examples show the path they work with.
+- Eight new checks in tests/run-tests.sh, section 7f.
+- The module code is that of 20261026.01.
+
+Hardware: NOT RUN for 20261102.01. Open, not verified: install of this package (pacman -U),
+macbook91-audio-verify on the LTS kernel and on 7.3.0-4-cachyos with the listening checks
+answered, the pacman hook output on the next transaction, and everything listed for 20261026.01
+(hw.runtime_20261026_01). The changes are text, help and state-directory handling, covered by the
+hermetic suite (tests/run-tests.sh, section 7f) only; a build, a cache or a test run is not a
+hardware PASS.
+
+Gates on the committed tree, run on 2026-11-02 on a development host with the 7.3.1-1-cachyos
+kernel that runs the stock codec (VERIFIED, each ran):
+- tests/run-tests.sh with the package built from this tree: 335 passed, 0 failed, 10 blocked (the
+  hardware checks it cannot run stay BLOCKED). The totals recorded in docs/test-status.json and
+  README.md are those of a host with the replacement module loaded: 336 passed, 0 failed, 9
+  blocked. That figure is derived from the run above (the stock-codec test runs there and the two
+  checks that compare the recorded totals are BLOCKED); it was NOT RUN on such a host.
+- make dist, run offline from a cache filled from the 20261026.02 tarball (the fetcher checked
+  every file against packaging/upstream.lock), gives the tarball the PKGBUILD pins (sha256
+  d579c68bd52fd1b1e298184c5a8b120ed9d2a472ffd8eab37d065f8a070052b9); the tarball differs from
+  that of 20261026.02 in VERSION, tools/macbook91-audio-verify, contrib/pacman/kernel-series and
+  src/cs420x-a1534/README.md only. makepkg --printsrcinfo equals .SRCINFO.
+- namcap on the package: 0 errors, 5 warnings explained in docs/NAMCAP.md; namcap on the
+  PKGBUILD: no output.
+- ShellCheck at warning level: clean on the 12 tracked shell scripts and the install scriptlet.
+- The promotion gate (the maintainer's extra test scripts and the scan for identifiers that
+  must not be published, over the files a commit carries) passed: 0 hits.
+
+Release assets: the files listed in SHA256SUMS and SHA256SUMS itself, which
+are the text files of this directory and the source tarball. No built package
+is part of this release.
+
+Maintainer's local build of the package, for reference only. It is not
+published. The package records the build date and the build environment, so a
+package you build yourself will not have this checksum; the reproducible
+artifact is the source tarball in SHA256SUMS.
+fa66ac6a751a4701cb1288fe08fd512ea60d71934cfd38b19ee1692bbbeddd74  macbook91-cs4208-dkms-20261102.01-1-x86_64.pkg.tar.zst

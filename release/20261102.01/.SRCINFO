@@ -1,6 +1,6 @@
 pkgbase = macbook91-cs4208-dkms
 	pkgdesc = CS4208 codec driver restoring internal speakers on Apple MacBook9,1 (A1534)
-	pkgver = 20261026.01
+	pkgver = 20261102.01
 	pkgrel = 1
 	url = https://github.com/Weegee/macbook91-cs4208-pub
 	install = macbook91-cs4208.install
@@ -10,16 +10,16 @@ pkgbase = macbook91-cs4208-dkms
 	license = GPL-3.0-or-later
 	license = LGPL-2.1-or-later
 	makedepends = make
-	depends = dkms
-	depends = wireplumber
-	depends = linux-cachyos-lts-headers
 	optdepends = linux-cachyos-headers: build the module for the current CachyOS kernel as well
 	optdepends = alsa-utils: required by macbook91-audio-verify for playback and capture checks
 	optdepends = sox: lets macbook91-audio-verify measure microphone level automatically
-	provides = macbook91-cs4208=20261026.01
+	provides = macbook91-cs4208=20261102.01
 	conflicts = macbook91-cs4208
 	replaces = macbook91-cs4208
-	source = macbook91-cs4208-dkms-20261026.01.tar
-	sha256sums = a841a3dca1a75665b1e56b5127cb1eabd7cac622627c192d68f0c6e540ab5430
+	source = macbook91-cs4208-dkms-20261102.01.tar
+	sha256sums = d579c68bd52fd1b1e298184c5a8b120ed9d2a472ffd8eab37d065f8a070052b9
 
 pkgname = macbook91-cs4208-dkms
+	depends = dkms
+	depends = wireplumber
+	depends = linux-cachyos-lts-headers
