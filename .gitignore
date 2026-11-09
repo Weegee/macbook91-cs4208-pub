@@ -19,3 +19,6 @@ packaging/macbook91-audio-verify
 # reassembled offline. Hash-checked against packaging/upstream.lock on every
 # use, so the cache cannot smuggle anything in.
 packaging/.upstream-cache/
+
+# graft's local graph cache — regenerable, not committed (run `graft build`).
+/graft/
