@@ -1,6 +1,6 @@
 # Project state
 
-Version 20261102.01 - updated 2026-11-02, adding the release 20261102.01 (third paragraph) to the state of 20261026.02 and 20261026.01 below.
+Version 20261109.01 - updated 2026-11-09, adding the release 20261109.01 (fourth paragraph) to the state of 20261102.01, 20261026.02 and 20261026.01 below.
 
 **20261026.01 is promoted and released (`release/20261026.01/`, tag `v20261026.01` on the promote commit, 2026-10-26), built and gated in software; the hardware gate was not run.** Kernel series 7.3 (tag v7.3, for
 7.3.0-4-cachyos) is supported next to 6.18 (LTS) and 7.2. On a match the patched probe sets the A1534 fixup to
@@ -15,6 +15,8 @@ on 7.3, jack hotplug, suspend. The fixup pin and the jack re-route are verified 
 **20261026.02 is promoted and released (`release/20261026.02/`, tag `v20261026.02` on the promote commit, 2026-10-26), built and gated in software; the hardware gate was not run: the text interfaces follow the house HIG, text part.** The release commit is `463d4f7` (`VERSION`, pinned tarball, `.SRCINFO`, `docs/CHANGELOG.md`); `make arch-pkg` built `dist/macbook91-cs4208-dkms-20261026.02-1-x86_64.pkg.tar.zst`, `tests/run-tests.sh` and `namcap` ran on the committed tree (`regress.suite`, `docs/NAMCAP.md`). The module is unchanged. What changed is the text and the options of `macbook91-audio-verify` (`--help`, `--version`, `-y`, `--no-input`, `--color`, `--no-color`, cancelled exit 130 and 143), of the pacman hook and its `kernel-series` helper, of the install scriptlet, and of the development and release tools; the PKGBUILD sets `depends` in `package()` (so that makepkg also builds on a host without the CachyOS repositories), as it did since 8d90422. Named deviations are in the code and in `tools/README.md`. Hardware: NOT RUN (`hw.runtime_20261026_02`). The maintainer decided on 2026-10-26 to release without the gate of `docs/RELEASING.md` section 4, as for 20261026.01, and to keep it as a pointer: install, one `macbook91-audio-verify` run with the listening checks, the hook output on the next transaction.
 
 **20261102.01 is promoted and released (`release/20261102.01/`, tag `v20261102.01` on the promote commit, published 2026-11-02; the GitHub releases of both repositories list it, checked 2026-11-09). Built and gated in software; the hardware gate was not run: audit findings of the text interfaces.** The release commit holds `VERSION`, `docs/CHANGELOG.md`, the pinned tarball and `.SRCINFO`; `make arch-pkg` built `dist/macbook91-cs4208-dkms-20261102.01-1-x86_64.pkg.tar.zst` on a development host that runs the stock codec, offline, from a fetcher cache filled from the 20261026.02 tarball (the fetcher checked every file against `packaging/upstream.lock`; the new tarball differs from the old one in `VERSION`, the verifier, `kernel-series` and `src/cs420x-a1534/README.md` only). `tests/run-tests.sh`, `namcap` and ShellCheck ran on the committed tree (`regress.suite`, `docs/NAMCAP.md`). The module is unchanged. What changed: help lines and messages of the verifier, the rollback command of the install text (`sudo pacman -R`), `promote-release.sh` (the deletion of old release directories is named, status messages go to stderr), the recovery hints and the state directory of `macbook91-runner` and `dev-audio-collect.sh` (`$XDG_STATE_HOME`, the sudo user's home from the account database), eight new checks in section 7f. Deviations stay named in the code (TXT-8 in the install scriptlet; FEH-2 and NAM-1 in `kernel-series`). `regress.suite` for this version is derived for a host with the module loaded (336 passed, 0 failed, 9 blocked) and was measured on a stock-codec host (335, 0, 10); the next run on a host with the module loaded settles it. Hardware: NOT RUN (`hw.runtime_20261102_01`); the gate of `docs/RELEASING.md` section 4 is kept as a pointer: install, one `macbook91-audio-verify` run with the listening checks, the hook output on the next transaction.
+
+**20261109.01 is promoted and released (`release/20261109.01/`, tag `v20261109.01` on the promote commit, published 2026-11-09). Built and gated in software; the hardware gate was not run: the documentation follows the house HIG, documentation part.** Only Markdown files changed (`README.md`, `docs/`, `src/cs420x-a1534/README.md`, `tools/README-macos-extraction.md`); the module, the packaged tools, the hook and the install text are those of 20261102.01. The tarball differs from that of 20261102.01 in `VERSION` and `src/cs420x-a1534/README.md` only. `make arch-pkg` built `dist/macbook91-cs4208-dkms-20261109.01-1-x86_64.pkg.tar.zst` on the development host (kernel 7.3.3-1-cachyos, module 20261102.01 loaded). `tests/run-tests.sh` ran on a clean copy of the committed tree with that package (`regress.suite`), `namcap` and ShellCheck on the package and the scripts (`docs/NAMCAP.md`). What changed: the README installation is a numbered procedure with a check and a way back, the CHANGELOG headings carry ISO dates and name incompatible changes first, every code block has a language, and the stale statements about 20261102.01 and the 2026-10-19 incident are corrected. Hardware: NOT RUN (`hw.runtime_20261109_01`); the gate of `docs/RELEASING.md` section 4 is kept as a pointer: install, one `macbook91-audio-verify` run with the listening checks, the hook output on the next transaction.
 
 **History note.** 20261021.01 is the first public release. Everything below that names an earlier version (tags, GitHub releases,
 release assets, installs, package checksums, `release/` directories) describes the earlier, private development line of this
@@ -172,13 +174,16 @@ Read only; no verifier run, no sound.
 
 ## Deliverable
 
-**Current promoted package:** `macbook91-cs4208-dkms 20261102.01-1` (`release/20261102.01/`)
-- **RELEASED** (tag `v20261102.01` on the promote commit, published 2026-11-02): audit findings of the text
-interfaces, no module change; hardware NOT RUN. See `release/20261102.01/STATUS.txt`.
+**Current promoted package:** `macbook91-cs4208-dkms 20261109.01-1` (`release/20261109.01/`)
+- **RELEASED** (tag `v20261109.01` on the promote commit, published 2026-11-09): the documentation follows the house HIG
+(documentation part), no module change; hardware NOT RUN. See `release/20261109.01/STATUS.txt`.
 
-Previous release: `macbook91-cs4208-dkms 20261026.02-1` (`release/20261026.02/`)
-- **RELEASED** (tag `v20261026.02`, published 2026-10-26): text interfaces follow the house HIG (text part), no module change; hardware NOT RUN
-(released without the gate by the maintainer's decision). See `release/20261026.02/STATUS.txt`.
+Previous release: `macbook91-cs4208-dkms 20261102.01-1` (`release/20261102.01/`)
+- **RELEASED** (tag `v20261102.01`, published 2026-11-02): audit findings of the text interfaces, no module change; hardware NOT RUN.
+See `release/20261102.01/STATUS.txt`.
+
+Before that `20261026.02`, tag `v20261026.02`, published 2026-10-26: text interfaces follow the house HIG (text part), no module change;
+hardware NOT RUN (released without the gate by the maintainer's decision); its release directory was pruned by `promote-release.sh`.
 
 Before that `20261026.01`, tag `v20261026.01`, published 2026-10-26: kernel series 7.3, the A1534 fixup pinned before the quirk tables,
 the LTS kernel as the default; hardware NOT RUN (released without the gate by the maintainer's decision); its release directory was
@@ -244,9 +249,9 @@ line is present like all the others.
 
 ## Exact next action
 
-**20261102.01 is promoted, tagged and published** (`docs/RELEASING.md` sections 5 and 6), without the hardware gate. At the maintainer's pace: install it,
+**20261109.01 is promoted, tagged and published** (`docs/RELEASING.md` sections 5 and 6), without the hardware gate. At the maintainer's pace: install it,
 run `macbook91-audio-verify` with the listening checks on the LTS kernel and record the result in `docs/test-status.json`
-(`hw.runtime_20261102_01`).
+(`hw.runtime_20261109_01`; `hw.runtime_20261102_01` is open as well, the module code is the same).
 
 **20261026.02 is promoted, tagged and published** (`docs/RELEASING.md` sections 5 and 6), without the hardware gate. At the maintainer's pace: install it, run `macbook91-audio-verify` with the listening checks on the LTS kernel and record the result in `docs/test-status.json` (`hw.runtime_20261026_02`).
 
@@ -315,9 +320,9 @@ again on 2026-10-20 under 20261020.01 (PASS, first row of the table above).
 
 ## Artifacts
 
-* Built package: `macbook91-cs4208-dkms-20261102.01-1-x86_64.pkg.tar.zst`
+* Built package: `macbook91-cs4208-dkms-20261109.01-1-x86_64.pkg.tar.zst`
   (untracked, kept in `dist/`, not published and not a release asset); its checksum is
-  in `release/20261102.01/STATUS.txt` for reference only. `release/` holds the newest promoted
+  in `release/20261109.01/STATUS.txt` for reference only. `release/` holds the newest promoted
   release (and the one before it, once there is one); older releases are not
   part of this repository, and `promote-release.sh` prunes them rather than a
   human remembering to.
