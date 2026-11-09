@@ -2,11 +2,41 @@
 
 Versions have the form YYYYMMDD.NN (release date, NN counts releases that
 day); the last section summarises the earlier numbering. Only
-`release/20261026.02/` and `release/20261102.01/` are part of this repository;
+`release/20261102.01/` and `release/20261109.01/` are part of this repository;
 older release directories cited below were removed from it and the citations
 are history.
 
-## 20261102.01: audit findings of the text interfaces
+## 20261109.01 (2026-11-09): documentation follows the house HIG, documentation part
+
+**No driver behaviour change.** The module, the packaged tools, the hook and
+the install text are unchanged from 20261102.01; only Markdown files changed
+(`README.md`, `docs/`, `src/cs420x-a1534/README.md`, `tools/README-macos-extraction.md`).
+Built and tested in software; NOT RUN on hardware when this section was
+written (`docs/test-status.json`, `hw.runtime_20261109_01`).
+
+- README: the installation is a list of numbered steps with the requirements
+  first, the expected output of the checksum command, the check after the
+  install and the way back (`sudo pacman -R macbook91-cs4208-dkms`). A new
+  "Usage" section shows the runner commands and the output of its `selfcheck`.
+  The sections follow the order of the house template. The README names what
+  was run for this revision (the checksum step) and what was not (build,
+  install, removal).
+- CHANGELOG: every version heading carries its ISO date, and entries with an
+  incompatible change name it in bold first (20261026.02, 20261026.01,
+  20261021.01).
+- Stale statements corrected: `docs/INCIDENT-20261019.md` says the incident
+  is fixed (20261020.01, measured on hardware 2026-10-20) instead of open;
+  `docs/PROJECT_STATE.md` no longer says that 20261102.01 is unpublished.
+- All code blocks in `docs/`, `src/cs420x-a1534/README.md` and
+  `tools/README-macos-extraction.md` carry a language; the second top-level
+  heading of `docs/AUDIT-BUNDLED-DRIVER.md` is a second-level heading; a bare
+  URL in `docs/HOST-POLICY.md` is a link with a name; em dashes are gone from
+  the headings and tables of the files that were edited.
+- Not changed on purpose: the em dashes in the prose and tables of the other
+  files under `docs/`, and the sealed `release/` directories, which stay as
+  they were released.
+
+## 20261102.01 (2026-11-02): audit findings of the text interfaces
 
 The module, the driver behaviour and the hook logic are unchanged from
 20261026.02. An audit of the text interfaces of the verifier, the development
@@ -48,7 +78,12 @@ and tested in software; NOT RUN on hardware when this section was written
   directory with and without `MACBOOK91_STATE_DIR`, the collector warning, the
   80 columns, the rollback command).
 
-## 20261026.02: text interfaces follow the house text HIG
+## 20261026.02 (2026-10-26): text interfaces follow the house text HIG
+
+**Incompatible:** `tools/dev-audio-collect.sh` prints only the output
+directory on stdout. A script that read the lines `baseline written to:` and
+`files:` from it must read the directory instead. The module and the
+packaged tools keep their interfaces.
 
 The module, the driver behaviour and the hook logic are unchanged from
 20261026.01. What changed is the text the package and its tools print and
@@ -107,7 +142,12 @@ software; NOT RUN on hardware when this section was written
   precedence, suggestions, no tracebacks); `tests/run-tests.sh` answers
   `--help` and `--version` itself.
 
-## 20261026.01: kernel series 7.3, the LTS kernel as the default, one series list
+## 20261026.01 (2026-10-26): kernel series 7.3, the LTS kernel as the default, one series list
+
+**Incompatible:** the package depends on `linux-cachyos-lts-headers` now, so
+an upgrade installs it. The `A1534_ALLOW_SERIES_MISMATCH` override is gone: a
+kernel of a series other than 6.18, 7.2 or 7.3 gets no module. After the
+upgrade, check the kernels you use with `macbook91-audio-verify`.
 
 **Driver behaviour changes.** The A1534 path pins its mainline fixup, and the
 headphone jack callback re-routes a running stream after the bring-up replay.
@@ -145,7 +185,12 @@ written (`docs/test-status.json`, `hw.runtime_20261026_01`).
 - Source identity: 6.18 `c7580fd70025fa36` (was `2fc8b8ad2d1b2deb`), 7.2
   `c6661a7c92c95904` (was `3459bbf7be37223c`), 7.3 `6a7014b2db87a081`.
 
-## 20261021.01: first public release; comments, attribution, licence headers and non-code files only
+## 20261021.01 (2026-10-21): first public release; comments, attribution, licence headers and non-code files only
+
+**Incompatible:** the audio baseline collector is `tools/dev-audio-collect.sh`
+now (it carried the name of the maintainer's machine), and its default output
+directory moved to `${XDG_STATE_HOME:-~/.local/state}/macbook91-cs4208/baselines`.
+Scripts that call the old name or read the old directory must change.
 
 **No driver behaviour change.** No executable line of the source tarball was
 added, removed or changed. Outside the tarball, executable lines changed in the
@@ -248,7 +293,7 @@ Commit hashes named in entries up to 20261021.01 belong to the maintainer's priv
   was not installed, `makepkg -si` was not run, and the new modules were not
   loaded.
 
-## 20261020.03: builds for the 6.18 LTS series as well as 7.2
+## 20261020.03 (2026-10-20): builds for the 6.18 LTS series as well as 7.2
 
 **6.18: `macbook91-audio-verify` PASS on hardware; suspend/resume on 6.18 NOT
 VERIFIED.** The 7.2 module is unchanged: its source identity is still
@@ -287,7 +332,7 @@ carried over from 20261020.01 and .02, whose module code is identical.
   checks per-series lock coverage, that the `dkms.conf` regex equals the
   shipped set, and that the 7.2 source identity stays pinned.
 
-## 20261020.02 — GPL-3.0-or-later outside the kernel module; the provenance record brought up to date
+## 20261020.02 (2026-10-20): GPL-3.0-or-later outside the kernel module; the provenance record brought up to date
 
 **No driver behaviour change.** The module's source identity hashes none of
 the changed files, so it stays that of 20261020.01 (`+79b16c8b296a3821`),
@@ -330,7 +375,7 @@ behind the new version.
   question, what macOS does and the probe that decides it; dead paths and
   stale current-state claims in the documentation are corrected.
 
-## 20261020.01 — a headphone plug no longer stops a running capture
+## 20261020.01 (2026-10-20): a headphone plug no longer stops a running capture
 
 **Driver fix.** A headphone plug during a running capture stopped that
 capture, and every capture opened after it stayed silent, unplugging
@@ -362,7 +407,7 @@ jackstream` run `20261020T063948Z-5274` PASS (`regress.concurrent_capture`,
   `docs/HARDWARE-PATH.md` and `docs/PROJECT_STATE.md` no longer call the plug
   harmless for a running capture.
 
-## 20261015.01 — a corrected verifier and tools from an audit of the tree
+## 20261015.01 (2026-10-15): a corrected verifier and tools from an audit of the tree
 
 **No driver behaviour change.** The driver headers' comments and two build
 messages in the module `Makefile` changed, so the module's source identity is
@@ -383,7 +428,7 @@ new; the compiled logic is that of 20261006.01.
   covers it.
 - `docs/RELEASING.md` collects the release procedure.
 
-## 20261006.01 — date-based versions
+## 20261006.01 (2026-10-06): date-based versions
 
 **No driver or content change.** The package is 0.5.1 under a new version
 number, so that the maintainer's packages are versioned the same way. pacman (`vercmp`) orders `20261006.01` after `0.5.1`, so the
