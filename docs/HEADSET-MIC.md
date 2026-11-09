@@ -69,7 +69,7 @@ playback keeps the codec awake between the readings, so a runtime suspend
 cannot reset the pin in between. In fish on the test machine, in the checkout, with no
 call and no recording running:
 
-```
+```fish
 aplay -D hw:0,0 -q -f S16_LE -r 44100 -c 4 -t raw /dev/zero &
 set apid $last_pid
 sudo ./tools/macbook91-codec-state capture /tmp/hs-0-empty.json

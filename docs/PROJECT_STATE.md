@@ -14,7 +14,7 @@ on 7.3, jack hotplug, suspend. The fixup pin and the jack re-route are verified 
 
 **20261026.02 is promoted and released (`release/20261026.02/`, tag `v20261026.02` on the promote commit, 2026-10-26), built and gated in software; the hardware gate was not run: the text interfaces follow the house HIG, text part.** The release commit is `463d4f7` (`VERSION`, pinned tarball, `.SRCINFO`, `docs/CHANGELOG.md`); `make arch-pkg` built `dist/macbook91-cs4208-dkms-20261026.02-1-x86_64.pkg.tar.zst`, `tests/run-tests.sh` and `namcap` ran on the committed tree (`regress.suite`, `docs/NAMCAP.md`). The module is unchanged. What changed is the text and the options of `macbook91-audio-verify` (`--help`, `--version`, `-y`, `--no-input`, `--color`, `--no-color`, cancelled exit 130 and 143), of the pacman hook and its `kernel-series` helper, of the install scriptlet, and of the development and release tools; the PKGBUILD sets `depends` in `package()` (so that makepkg also builds on a host without the CachyOS repositories), as it did since 8d90422. Named deviations are in the code and in `tools/README.md`. Hardware: NOT RUN (`hw.runtime_20261026_02`). The maintainer decided on 2026-10-26 to release without the gate of `docs/RELEASING.md` section 4, as for 20261026.01, and to keep it as a pointer: install, one `macbook91-audio-verify` run with the listening checks, the hook output on the next transaction.
 
-**20261102.01 is promoted (`release/20261102.01/`) and tagged `v20261102.01` locally on the promote commit (2026-11-02); it is not pushed and no GitHub release exists. Built and gated in software; the hardware gate was not run: audit findings of the text interfaces.** The release commit holds `VERSION`, `docs/CHANGELOG.md`, the pinned tarball and `.SRCINFO`; `make arch-pkg` built `dist/macbook91-cs4208-dkms-20261102.01-1-x86_64.pkg.tar.zst` on a development host that runs the stock codec, offline, from a fetcher cache filled from the 20261026.02 tarball (the fetcher checked every file against `packaging/upstream.lock`; the new tarball differs from the old one in `VERSION`, the verifier, `kernel-series` and `src/cs420x-a1534/README.md` only). `tests/run-tests.sh`, `namcap` and ShellCheck ran on the committed tree (`regress.suite`, `docs/NAMCAP.md`). The module is unchanged. What changed: help lines and messages of the verifier, the rollback command of the install text (`sudo pacman -R`), `promote-release.sh` (the deletion of old release directories is named, status messages go to stderr), the recovery hints and the state directory of `macbook91-runner` and `dev-audio-collect.sh` (`$XDG_STATE_HOME`, the sudo user's home from the account database), eight new checks in section 7f. Deviations stay named in the code (TXT-8 in the install scriptlet; FEH-2 and NAM-1 in `kernel-series`). `regress.suite` for this version is derived for a host with the module loaded (336 passed, 0 failed, 9 blocked) and was measured on a stock-codec host (335, 0, 10); the next run on a host with the module loaded settles it. Hardware: NOT RUN (`hw.runtime_20261102_01`); the gate of `docs/RELEASING.md` section 4 is kept as a pointer: install, one `macbook91-audio-verify` run with the listening checks, the hook output on the next transaction.
+**20261102.01 is promoted and released (`release/20261102.01/`, tag `v20261102.01` on the promote commit, published 2026-11-02; the GitHub releases of both repositories list it, checked 2026-11-09). Built and gated in software; the hardware gate was not run: audit findings of the text interfaces.** The release commit holds `VERSION`, `docs/CHANGELOG.md`, the pinned tarball and `.SRCINFO`; `make arch-pkg` built `dist/macbook91-cs4208-dkms-20261102.01-1-x86_64.pkg.tar.zst` on a development host that runs the stock codec, offline, from a fetcher cache filled from the 20261026.02 tarball (the fetcher checked every file against `packaging/upstream.lock`; the new tarball differs from the old one in `VERSION`, the verifier, `kernel-series` and `src/cs420x-a1534/README.md` only). `tests/run-tests.sh`, `namcap` and ShellCheck ran on the committed tree (`regress.suite`, `docs/NAMCAP.md`). The module is unchanged. What changed: help lines and messages of the verifier, the rollback command of the install text (`sudo pacman -R`), `promote-release.sh` (the deletion of old release directories is named, status messages go to stderr), the recovery hints and the state directory of `macbook91-runner` and `dev-audio-collect.sh` (`$XDG_STATE_HOME`, the sudo user's home from the account database), eight new checks in section 7f. Deviations stay named in the code (TXT-8 in the install scriptlet; FEH-2 and NAM-1 in `kernel-series`). `regress.suite` for this version is derived for a host with the module loaded (336 passed, 0 failed, 9 blocked) and was measured on a stock-codec host (335, 0, 10); the next run on a host with the module loaded settles it. Hardware: NOT RUN (`hw.runtime_20261102_01`); the gate of `docs/RELEASING.md` section 4 is kept as a pointer: install, one `macbook91-audio-verify` run with the listening checks, the hook output on the next transaction.
 
 **History note.** 20261021.01 is the first public release. Everything below that names an earlier version (tags, GitHub releases,
 release assets, installs, package checksums, `release/` directories) describes the earlier, private development line of this
@@ -173,7 +173,7 @@ Read only; no verifier run, no sound.
 ## Deliverable
 
 **Current promoted package:** `macbook91-cs4208-dkms 20261102.01-1` (`release/20261102.01/`)
-- **PROMOTED** (tag `v20261102.01` on the promote commit, local only; not pushed, not published): audit findings of the text
+- **RELEASED** (tag `v20261102.01` on the promote commit, published 2026-11-02): audit findings of the text
 interfaces, no module change; hardware NOT RUN. See `release/20261102.01/STATUS.txt`.
 
 Previous release: `macbook91-cs4208-dkms 20261026.02-1` (`release/20261026.02/`)
@@ -244,9 +244,8 @@ line is present like all the others.
 
 ## Exact next action
 
-**20261102.01 is promoted and tagged locally; nothing is pushed or published.** With the maintainer's authorization: push `main` and the tag
-`v20261102.01`, create the GitHub release with the seven tracked files of `release/20261102.01/` as assets (`docs/RELEASING.md` section 6), then
-install the package and run `macbook91-audio-verify` with the listening checks and record the result in `docs/test-status.json`
+**20261102.01 is promoted, tagged and published** (`docs/RELEASING.md` sections 5 and 6), without the hardware gate. At the maintainer's pace: install it,
+run `macbook91-audio-verify` with the listening checks on the LTS kernel and record the result in `docs/test-status.json`
 (`hw.runtime_20261102_01`).
 
 **20261026.02 is promoted, tagged and published** (`docs/RELEASING.md` sections 5 and 6), without the hardware gate. At the maintainer's pace: install it, run `macbook91-audio-verify` with the listening checks on the LTS kernel and record the result in `docs/test-status.json` (`hw.runtime_20261026_02`).
@@ -274,10 +273,10 @@ version, which this repository does not carry (built packages are untracked and 
 `pacman -R` and a reboot restore the stock codec.
 
 The next thing that will happen on its own is a kernel update. When it does,
-DKMS rebuilds the module offline — the fetch runs only at package build
-time — and the honest check afterwards is one command:
+DKMS rebuilds the module offline (the fetch runs only at package build
+time), and the honest check afterwards is one command:
 
-```
+```bash
 macbook91-audio-verify
 ```
 
@@ -294,16 +293,16 @@ section 0), not to override the check.
 
 | | |
 | --- | --- |
-| `regress.concurrent_capture` | **PASS** since 2026-10-20 under 20261020.01 with the driver fix `fix.capture_resync_after_jack_replay` (`macbook91-runner jackstream` run `20261020T063948Z-5274`) — listed so the row is not silently dropped: FAIL on 2026-10-19 under 20261015.01, a headphone plug stopped a running capture (`docs/INCIDENT-20261019.md`); a real call with a headset plugged in is not run (`hw.headset_call`, accepted by the maintainer on 2026-10-20 without a test run) |
-| jack-callback fix (2026-09-21) | **PASS** since 2026-10-06 — listed so the row is not silently dropped: verifier 27/0/2 and jackstream run `20261006T081744Z-3324` 13/13 on the test machine, whose plug half measured nothing (the headphones were already in) |
-| `hw.dkms_kernel_update` | **PASS** since 2026-09-21 — closed, and listed here only so the row is not silently dropped: rebuild on the 7.2.4-3 → 7.2.6-1 kernel update, rebuild again on a package upgrade, reboot, then the maintainer's verifier run at 27/0/2 |
+| `regress.concurrent_capture` | **PASS** since 2026-10-20 under 20261020.01 with the driver fix `fix.capture_resync_after_jack_replay` (`macbook91-runner jackstream` run `20261020T063948Z-5274`); listed so the row is not silently dropped. FAIL on 2026-10-19 under 20261015.01, a headphone plug stopped a running capture (`docs/INCIDENT-20261019.md`); a real call with a headset plugged in is not run (`hw.headset_call`, accepted by the maintainer on 2026-10-20 without a test run) |
+| jack-callback fix (2026-09-21) | **PASS** since 2026-10-06; listed so the row is not silently dropped. Verifier 27/0/2 and jackstream run `20261006T081744Z-3324` 13/13 on the test machine, whose plug half measured nothing (the headphones were already in) |
+| `hw.dkms_kernel_update` | **PASS** since 2026-09-21; closed, and listed here only so the row is not silently dropped. Rebuild on the 7.2.4-3 → 7.2.6-1 kernel update, rebuild again on a package upgrade, reboot, then the maintainer's verifier run at 27/0/2 |
 | `hw.suspend_resume_6_18_lts` | NOT_RUN - no suspend happened in the 6.18 gate boot of 2026-10-20, so suspend/resume under 6.18.55-2-cachyos-lts is not verified (accepted by the maintainer on 2026-10-20 without a test run, not tested; the status stays NOT_RUN); the 6.18 audio check itself passed (`hw.runtime_6_18_lts`) |
 | `hw.headset_call` | NOT_RUN - a real call with a headset plugged in was never run (accepted by the maintainer on 2026-10-20 without a test run, not tested; the status stays NOT_RUN) |
-| `hw.hdmi_preserved`, `hw.hdmi_under_fixed_profile` | SKIPPED — the maintainer's decision, scope limit, not a satisfied gate |
-| `transport.discriminates` | FAIL — the amplifier read path is not an instrument; nothing is concluded from it in either direction, and the bring-up stays off by default |
+| `hw.hdmi_preserved`, `hw.hdmi_under_fixed_profile` | SKIPPED: the maintainer's decision, scope limit, not a satisfied gate |
+| `transport.discriminates` | FAIL: the amplifier read path is not an instrument; nothing is concluded from it in either direction, and the bring-up stays off by default |
 | `hw.amp_i2c_bringup`, `transport.engine_responds` | BLOCKED behind that same instrument |
-| `hw.suspend_self_cancel` | NOT_RUN — a diagnostic curiosity, not a product gate |
-| D2/D3 in `docs/CLAIMS-AUDIT.md` | UNKNOWN — whether the amplifier supply drops in S3 |
+| `hw.suspend_self_cancel` | NOT_RUN: a diagnostic curiosity, not a product gate |
+| D2/D3 in `docs/CLAIMS-AUDIT.md` | UNKNOWN: whether the amplifier supply drops in S3 |
 | `env.rtkit_boot_messages` | **PASS** since 2026-10-15, listed so the row is not silently dropped: the boot that started 2026-10-14 12:29:53, after rtkit was installed, holds no RTKit line at `-p4` (`docs/HOST-POLICY.md` 2.4) |
 | cachyos-settings `20-audio-pm.rules` lines | upstream defect, fixed in CachyOS-Settings `c8e575bbd4`, not yet packaged on 2026-10-14; no local action (`docs/HOST-POLICY.md` 1.4) |
 | audit changes of 2026-10-15 | released as 20261015.01; the packaged verifier PASS on the test machine (maintainer report, counts not recorded). Still NOT_RUN on hardware: the runner's privileged commands other than `jackstream` (run 2026-10-20), a codec-state re-capture with the corrected amplifier addressing, a recovery-archive run (unpackaged development tools) |

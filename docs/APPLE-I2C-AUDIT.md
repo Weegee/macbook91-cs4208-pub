@@ -61,7 +61,7 @@ I2C buses. No bus dispatch is missing from our implementation.
 Both go through a verb-issuing virtual at widget vptr+0x120 with the signature
 `(verb, parm, uint *res)`, and both use the **4-bit** HDA verb forms:
 
-```
+```text
 readProcessingCoefficient(index, *out):
     runVerb(0x0d, 0, &saved)      GET_COEF_INDEX     save the current index
     runVerb(0x05, index, &scratch) SET_COEF_INDEX
@@ -97,7 +97,7 @@ and `SET_PROC_COEF` (0x4) are *not* in the exempt group but `GET_PROC_COEF`
 
 ## 3. `enableI2C(bool)` @ 0x9c2dda — the bridge
 
-```
+```text
 node = getWidgetWithNodeID(0x24)      ; !node -> kIOReturnNoDevice, line 0x394
 readProcessingCoefficient(0x00, &v)   ; error -> return,            line 0x398
 v ^= 0x08
@@ -122,7 +122,7 @@ The code is faithful; the documentation is being corrected, not the code.
 
 ## 4. `i2cWrite(addr, reg, val)` @ 0x9c328c
 
-```
+```text
 node = getWidgetWithNodeID(0x24)                    ; !node -> line 0x41a
 node->powerState(&saved)
 if (saved == 3) node->setPowerState(D0, false)
@@ -141,7 +141,7 @@ return 0
 
 ## 5. `i2cRead(addr, reg, *out)` @ 0x9c2f1e
 
-```
+```text
 node = getWidgetWithNodeID(0x24)                    ; !node -> line 0x3c6
 node->powerState(&saved)
 if (saved == 3) node->setPowerState(D0, false)
@@ -211,7 +211,7 @@ would silently use as `0xffff`.
 
 `AppleHDATDMAmpTAS5758L::enable(bool)` @ 0xa2e1b4:
 
-```
+```text
 fg = this->fg                       (this+0x10)
 fg->setPowerState(D0, false)                                   ; line 0x6d
 fg->enableI2C(true)                                            ; line 0x71

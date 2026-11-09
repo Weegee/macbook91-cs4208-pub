@@ -27,7 +27,7 @@ never collected, and why no amount of searching the archive could find it.
 
 The main binary contains, among others:
 
-```
+```text
 AppleHDATDMBusManagerCS4208      AppleHDATDMAmpTAS5758L
 AppleHDATDMBusManagerCS8409      AppleHDATDMAmpTAS5764L
 AppleHDATDMDevice                AppleHDATDMAmpMAX98706
@@ -38,7 +38,7 @@ AppleHDAFunctionGroupCS4208      AppleHDATDMAmpSSM3515
 
 `AppleHDAFunctionGroupCS4208` implements:
 
-```
+```text
 enableI2C(bool)
 i2cRead (unsigned short addr, unsigned short reg, unsigned int *val)
 i2cWrite(unsigned short addr, unsigned short reg, unsigned short val)
@@ -52,7 +52,7 @@ same architecture Linux already implements for the Cirrus CS8409
 
 ### 2.1 Enabling the bridge
 
-```
+```text
 v = coef[0x00]
 coef[0x00] = v ^ 0x08          /* pulse bit 3 */
 if (enable)
@@ -70,7 +70,7 @@ was wrong.
 
 ### 2.2 Write transaction
 
-```
+```text
 coef[0x14] = addr << 1         /* 7-bit address, write direction */
 coef[0x16] = 0x04              /* start */
 read coef[0x17]                /* status */
@@ -84,7 +84,7 @@ read coef[0x17]
 
 ### 2.3 Read transaction
 
-```
+```text
 coef[0x14] = addr << 1
 coef[0x16] = 0x04
 read coef[0x17]
@@ -141,7 +141,7 @@ copied into the object by the constructor.
 
 Surrounding sequence:
 
-```
+```text
 FunctionGroup::setPowerState(D0)
 enableI2C(true)
 for each entry: i2cWrite(addr, reg, val); i2cRead(addr, reg) and compare

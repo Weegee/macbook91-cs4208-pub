@@ -4,7 +4,7 @@ These three scripts reproduce the provenance chain behind
 `docs/AMPLIFIER-PROTOCOL.md`. They download nothing but official Apple data and
 execute nothing that was downloaded.
 
-```
+```bash
 # 1. what Apple offers this board (no download)
 ./macbook91-fetch-macos-recovery info latest
 

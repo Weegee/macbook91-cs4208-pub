@@ -17,7 +17,7 @@ published, see `docs/EVIDENCE-MAP.md`.)
 
 ## Findings
 
-### F1 — The A1534 path is completely ungated (critical)
+### F1: The A1534 path is completely ungated (critical)
 
 `cs4208_probe()` in the snapshot:
 
@@ -51,7 +51,7 @@ Phase 3 of the audio task statement requires.
 It **only logs** and continues. So on a non-MacBook9,1 CS4208 the sequence
 proceeds to completion regardless, merely emitting debug noise.
 
-### F2 — Driver-wide `ops` are mutated from a per-codec probe (critical)
+### F2: Driver-wide `ops` are mutated from a per-codec probe (critical)
 
 ```c
 	hda_codec_to_driver(codec)->ops = &cs_4208_codec_ops;
@@ -73,7 +73,7 @@ The snapshot's own comment shows the authors hit a consequence of this
 (re-probe failing with `-EINVAL` unless `.probe`/`.remove` are duplicated into
 the replacement table), and worked around the symptom rather than the cause.
 
-### F3 — Mainline quirk matching is broken for four other Macs (high)
+### F3: Mainline quirk matching is broken for four other Macs (high)
 
 The snapshot rewrites `cs420x_fixup_tbl`:
 
@@ -99,7 +99,7 @@ Note this is the *opposite direction* from the historical P0 hypothesis:
 the snapshot **introduces** a quirk-semantics regression rather than fixing
 one. See `docs/ROOT-CAUSE.md` §3.
 
-### F4 — Two mainline quirk entries are silently dropped (medium)
+### F4: Two mainline quirk entries are silently dropped (medium)
 
 `cs4208_mac_fixup_tbl` in the snapshot omits two entries present in v7.2.4:
 
@@ -110,7 +110,7 @@ one. See `docs/ROOT-CAUSE.md` §3.
 
 MacPro 6,1 and iMac 16,1 would fall back to bare `CS4208_GPIO0`.
 
-### F5 — GPIO writes bypass the PM-aware helper (medium; suspend-relevant)
+### F5: GPIO writes bypass the PM-aware helper (medium; suspend-relevant)
 
 ```c
 -	if (spec->gpio_mask)
@@ -129,7 +129,7 @@ speaker amplifier DFET supply is GPIO-controlled
 mechanism for "audio gone after resume". Applied unconditionally to all
 CS420x, this is a regression against mainline.
 
-### F6 — Return values discarded (low, but masks real failures)
+### F6: Return values discarded (low, but masks real failures)
 
 ```c
 	err = setup_a1534(codec);
@@ -139,7 +139,7 @@ CS420x, this is a regression against mainline.
 `err` is overwritten and never tested, so a failing initialisation is
 indistinguishable from success.
 
-### F7 — Snapshot predates the target kernel (provenance)
+### F7: Snapshot predates the target kernel (provenance)
 
 ```c
 -	spec = kzalloc_obj(*spec);
@@ -152,7 +152,7 @@ based on a pre-v7.2.4 mainline. Its `linux-driver-metadata/*` files are all
 0 bytes, so the exact base is unrecorded. It still compiles, because
 `kzalloc()` remains available.
 
-### F8 — `play_a1534()` drives streaming state at probe time (medium)
+### F8: `play_a1534()` drives streaming state at probe time (medium)
 
 `play_a1534()` sets `AC_VERB_SET_STREAM_FORMAT` (`0x4013`),
 `AC_VERB_SET_CHANNEL_STREAMID` (`0x10`) and a D0/D3 sequence on converter
@@ -160,7 +160,7 @@ based on a pre-v7.2.4 mainline. Its `linux-driver-metadata/*` files are all
 not itself emit sound, but it does leave the codec in a streaming
 configuration established outside any PCM lifecycle.
 
-### F9 — The power-state churn behind the known concurrency risk (open)
+### F9: The power-state churn behind the known concurrency risk (open)
 
 `patch_cirrus_a1534_setup.h` contains **223** `AC_VERB_SET_POWER_STATE` and
 **134** `AC_VERB_GET_POWER_STATE` operations, many on the AFG.
@@ -168,7 +168,7 @@ Phase 4 of the audio task statement flags exactly this as a possible breaker of
 concurrent capture/playback. The concern is therefore concrete, not
 hypothetical. **Unassessed — remains a release blocker.**
 
-### F10 — The sequence is a replay, not an implementation (design)
+### F10: The sequence is a replay, not an implementation (design)
 
 Measured verb histogram of `patch_cirrus_a1534_setup.h`: 373
 `AC_VERB_PARAMETERS` reads, 223 `SET_POWER_STATE`, 54 `SET_AMP_GAIN_MUTE`,
@@ -204,12 +204,12 @@ while F3–F5 regress mainline behaviour for at least six other Mac models.
 
 ---
 
-# Round 2: `patch_cirrus_a1534_pcm.h` (444 lines)
+## Round 2: `patch_cirrus_a1534_pcm.h` (444 lines)
 
 The first round audited the `cs420x.c` delta. This round audits the custom PCM
 layer, which is where the speaker/headphone routing actually lives.
 
-### F11 — Per-codec stream state kept in module-global variables (critical)
+### F11: Per-codec stream state kept in module-global variables (critical)
 
 ```c
 static unsigned int cs4208_cur_stream_tag;	/* running PCM stream tag */
@@ -226,7 +226,7 @@ prepare/cleanup" as a hypothesis needing review. It is not merely unproven
 here — it is absent. A jack event arriving during `prepare` can re-point a
 stream using a half-updated tag/format pair.
 
-### F12 — `hinfo->nid` is mutated inside `.open` (high)
+### F12: `hinfo->nid` is mutated inside `.open` (high)
 
 ```c
 	if (hp_pin_sense) {
@@ -245,7 +245,7 @@ from whatever the jack callback later decides. Phase 4 of the audio task stateme
 code does the opposite, and additionally runs the full `play_a1534()` /
 `headphones_a1534()` verb replay from inside `.open`.
 
-### F13 — A private kernel struct is copied into the module (critical, latent)
+### F13: A private kernel struct is copied into the module (critical, latent)
 
 ```c
 // this is very hacky ... re-define these from hda_codec.c here
@@ -268,7 +268,7 @@ corrupts converter state. Phase 8 of the audio task statement requires robust DK
 rebuild behaviour across kernel updates; this construct is incompatible with
 that requirement as written.
 
-### F14 — `remove` leaks the generic spec (high)
+### F14: `remove` leaks the generic spec (high)
 
 ```c
 static void cs_4208_free_explicit(struct hda_codec *codec)
@@ -283,7 +283,7 @@ input paths, and so on) leaks, and generic teardown never runs. The same
 header even defines `#define cs_4208_free snd_hda_gen_free` — and then does
 not use it.
 
-### F15 — Declared PCM capabilities contradict the hardware (high)
+### F15: Declared PCM capabilities contradict the hardware (high)
 
 ```c
 static const struct hda_pcm_stream cs4208_pcm_analog_playback = {
@@ -301,7 +301,7 @@ static const struct hda_pcm_stream cs4208_pcm_analog_playback = {
 The converter it assigns, `0x04`, is reported by this machine's own codec as
 **stereo** (`wcaps 0xd043d`), supporting 32k–192k and 16/20/24/32-bit:
 
-```
+```text
 Node 0x04 [Audio Output] wcaps 0xd043d: Stereo Amp-Out Stripe
   PCM: rates [0x7f0]: 32000 ... 192000   bits [0x1e]: 16 20 24 32
 ```
@@ -333,7 +333,7 @@ for headphones, which is *not* what a reading of the pin connection lists
 alone would predict (see the correction in `docs/ROOT-CAUSE.md` §4). That
 discrepancy is the single most important thing to resolve on hardware.
 
-### F16 — The PCM is bound to a converter the driver powers off (critical)
+### F16: The PCM is bound to a converter the driver powers off (critical)
 
 Resolved while settling the open question in `docs/ROOT-CAUSE.md` §4.
 

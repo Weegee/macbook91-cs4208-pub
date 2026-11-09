@@ -77,7 +77,7 @@ VERIFIED and not needed to explain the lines.
 **Upstream.** CachyOS-Settings commit `c8e575bbd4`, "udev/audio-pm: Misc fixes (#245)", 2026-09-24,
 replaces the inline rules with a helper `/usr/lib/udev/audio-pm-ctl` whose `init` step returns 0 on
 battery and whose `battery` step writes 10 when the state file is empty or missing (read on 2026-10-14
-from https://github.com/CachyOS/CachyOS-Settings, branch master, by the audit's planning session; the
+from the [CachyOS-Settings repository](https://github.com/CachyOS/CachyOS-Settings), branch master, by the audit's planning session; the
 implementing session did not fetch it again). The installed 1:1.4.1-1 does not contain
 it yet (VERIFIED: installed rule text; `pacman -Si` listed 1:1.4.1-1 as newest on 2026-10-14). No local
 action: the messages go away with the first cachyos-settings release that carries the commit. Side effect
@@ -86,7 +86,7 @@ values enable power saving. On the test machine TLP rewrites the value afterward
 
 Check after a cachyos-settings update (the second line must print `helper-present`, the third `0`):
 
-```
+```fish
 pacman -Q cachyos-settings
 test -x /usr/lib/udev/audio-pm-ctl; and echo helper-present
 journalctl -b -p4 | grep -c -E 'snd-hda-intel-powersave|snd_hda_intel/parameters'

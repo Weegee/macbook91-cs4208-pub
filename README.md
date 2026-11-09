@@ -35,34 +35,67 @@ byte.
 
 ## Installation (Arch Linux and derivatives)
 
-Install the headers of every kernel you use. Download `PKGBUILD`,
-`macbook91-cs4208.install`, the source tarball and `SHA256SUMS` from the
-[latest release](https://github.com/Weegee/macbook91-cs4208-pub/releases/latest)
-into one directory, check them and build the package:
+Requirements: `base-devel`, `dkms`, the headers of every kernel you use and,
+for kernels built with clang (CachyOS), `clang`, `lld` and `llvm`. The build
+refuses to run if the toolchain family does not match the kernel's, rather than
+producing a module that loads and misbehaves.
 
-```sh
-sha256sum -c --ignore-missing SHA256SUMS
-makepkg -si          # needs base-devel, dkms and kernel headers
-sudo reboot
-macbook91-audio-verify
+1. Open the [latest release](https://github.com/Weegee/macbook91-cs4208-pub/releases/latest)
+   and download `PKGBUILD`, `macbook91-cs4208.install`, the source tarball
+   `macbook91-cs4208-dkms-VERSION.tar` and `SHA256SUMS` into one new
+   directory. VERSION is the release's version, for example `20261102.01`.
+2. In that directory, check the files:
+
+   ```bash
+   sha256sum -c --ignore-missing SHA256SUMS
+   ```
+
+   The output lists three files, each with `OK`:
+
+   ```text
+   PKGBUILD: OK
+   macbook91-cs4208.install: OK
+   macbook91-cs4208-dkms-VERSION.tar: OK
+   ```
+
+3. Build and install the package:
+
+   ```bash
+   makepkg -si
+   ```
+
+4. Reboot.
+5. Check the installation in a terminal and answer the listening checks when
+   it asks:
+
+   ```bash
+   macbook91-audio-verify
+   ```
+
+`--ignore-missing` skips the lines of `SHA256SUMS` whose files you did not
+download (`.SRCINFO`, `STATUS.txt`, `upstream.lock`, or any of the three files
+above). It fails when none of the listed files is there, but it exits
+successfully as soon as one of them is, so the exit status alone does not show
+that the three files were checked: look for the three `OK` lines.
+`macbook91-audio-verify --help` lists the verifier's options; `--no-sound` runs
+the software checks only and plays and records nothing.
+
+To undo the installation, remove the package and reboot; the stock in-tree
+codec is back:
+
+```bash
+sudo pacman -R macbook91-cs4208-dkms
 ```
 
-`macbook91-audio-verify --help` lists its options; `--no-sound` runs the
-software checks only and plays and records nothing.
-
-`sha256sum` must print `OK` for `PKGBUILD`, `macbook91-cs4208.install` and the
-source tarball `macbook91-cs4208-dkms-<version>.tar`. `--ignore-missing` skips
-the lines of `SHA256SUMS` whose files you did not download (`.SRCINFO`,
-`STATUS.txt`, `upstream.lock`, or any of the three files above). It fails when
-none of the listed files is there, but it exits successfully as soon as one of
-them is, so the exit status alone does not show that the three files were
-checked: look for the three `OK` lines.
+Checked on 2026-11-09: step 2, on the files of release 20261102.01. Not run
+for this revision of the text: steps 3 to 5 and the removal. What has run on
+hardware, release by release, is under "What is proven, and what is not".
 
 From a checkout the same files are in `release/<version>/`. To build from the
 source tree instead (`make dist`, which `make arch-pkg` runs, needs a git
 checkout of the repository, not an unpacked tarball or release download):
 
-```sh
+```bash
 make arch-pkg
 sudo pacman -U dist/macbook91-cs4208-dkms-*.pkg.tar.zst
 ```
@@ -80,11 +113,6 @@ above. If a later release lists a ready-built package, install that with
 `sudo pacman -U` instead. Packages are not signed. If you maintain your own
 pacman repository, add the package to it as usual.
 
-Requires `dkms`, kernel headers matching the running kernel, and, for kernels
-built with clang (CachyOS), `clang`, `lld` and `llvm`. The build refuses to run
-if the toolchain family does not match the kernel's, rather than producing a
-module that loads and misbehaves.
-
 `release/<version>/` carries the `PKGBUILD`, `.SRCINFO`, the source tarball, the
 install scriptlet, `upstream.lock` (the pinned hashes of the kernel files the
 tarball was assembled from), `SHA256SUMS` and a status note for the newest
@@ -93,6 +121,43 @@ promoted release. These files are the release's assets. A built
 records the builder's directories and installed packages. `STATUS.txt` records
 the checksum of the maintainer's local build for reference only; a package you
 build yourself has a different checksum.
+
+## Usage
+
+After the installation, run `macbook91-audio-verify` (step 5 above). The
+measurement tools in `tools/` are for work from a checkout; `tools/README.md`
+says which one to reach for. Their entry point is `tools/macbook91-runner`:
+
+```bash
+tools/macbook91-runner selfcheck        # nothing is touched
+tools/macbook91-runner preflight        # identity, versions, sleep mode
+sudo tools/macbook91-runner probe --with-stream
+tools/macbook91-runner diff             # two captures, field by field
+tools/macbook91-runner wake             # what wakes the machine early
+```
+
+The output of `selfcheck` on 2026-11-09, shortened to the check lines and the
+verdict (the free-space check and the run paths are left out):
+
+```text
+== selfcheck (nothing is touched) ==
+selfcheck.macbook91-amp-transport      PASS     present and parses
+selfcheck.dep.python3                  PASS     /usr/bin/python3
+selfcheck.dep.aplay                    PASS     /usr/bin/aplay
+selfcheck.dep.systemctl                PASS     /usr/bin/systemctl
+selfcheck.dep.modinfo                  PASS     /usr/bin/modinfo
+selfcheck.unit_restore                 PASS     save/restore bookkeeping runs and verifies
+selfcheck.not_root                     PASS     running unprivileged, as it should
+
+== verdict: PASS ==
+```
+
+Every run lands in one directory under `$XDG_STATE_HOME/macbook91-cs4208/runs/`
+(by default `~/.local/state/macbook91-cs4208/runs/`) that survives a reboot,
+with a human report and a machine-readable result.
+Each test reports PASS, FAIL, BLOCKED, NOT_RUN or SKIPPED; a mandatory test
+that is never reached forces the verdict to INCOMPLETE rather than disappearing.
+The other commands were not run for this revision of the text.
 
 ## The defect this exists for, and how it was found
 
@@ -103,12 +168,12 @@ function reset, a full re-probe and a PCI remove/rescan all failed. So did
 
 The cause was a single register:
 
-```
+```text
 converter 0x0a   cvt_chan_count   0x03  ->  0x00
 ```
 
 Found by capturing 722 capability-validated fields of codec state either side
-of one suspend — at rest and with a four-channel stream running — with the
+of one suspend, at rest and with a four-channel stream running, with the
 speakers confirmed audible before and silent after. It is the **only**
 functional field in the whole codec that moves.
 
@@ -117,8 +182,8 @@ amplifier gain/mute field as the input amplifier, right channel, index 0,
 because it put the direction and channel selector into the 8-bit parameter
 the hwdep ioctl passes, where the codec never sees it. Amplifier output state
 either side of the suspend was therefore not compared, and "the only field
-that moves" holds for the other fields only. macbook91-codec-state now
-addresses the amplifiers correctly. The fix itself is measured on its own:
+that moves" holds for the other fields only. macbook91-codec-state
+addresses the amplifiers correctly since 20261015.01. The fix itself is measured on its own:
 with the channel count programmed on resume the speakers play after deep
 suspend (gate fix.cvt_chan_count_programmed in docs/test-status.json).
 
@@ -128,14 +193,14 @@ format sees a correct four-channel stream while the converter emits a single
 channel into a TDM frame the four TAS5758L amplifiers read as four slots.
 
 Nothing in Linux restores it: `sound/hda/core/regmap.c` deliberately keeps
-`AC_VERB_GET_CVT_CHAN_COUNT` out of the regmap's writeable set — *"managed in
-HDMI CA code"* — so `snd_hda_regmap_sync()` never replays it, and this codec
+`AC_VERB_GET_CVT_CHAN_COUNT` out of the regmap's writeable set (*"managed in
+HDMI CA code"*), so `snd_hda_regmap_sync()` never replays it, and this codec
 has no HDMI CA code. Headphone converter `0x02` has no such register, which is
 exactly why headphones always survived a resume.
 
 ## Layout
 
-```
+```text
 src/cs420x-a1534/   the module: mainline cs420x.c plus a gated A1534 path
 tools/              measurement tools, one entry point: macbook91-runner
 tests/              336 hermetic tests, no root, no hardware, no sound
@@ -162,22 +227,6 @@ the same result as one started in the foreground.
 each claim against the raw evidence, what that evidence actually supports, the
 alternative that was not excluded, and the experiment that would decide it.
 Several conclusions in this project's own history were withdrawn that way.
-
-## Tools
-
-```sh
-tools/macbook91-runner selfcheck        # nothing is touched
-tools/macbook91-runner preflight        # identity, versions, sleep mode
-sudo tools/macbook91-runner probe --with-stream
-tools/macbook91-runner diff             # two captures, field by field
-tools/macbook91-runner wake             # what wakes the machine early
-```
-
-Every run lands in one directory under `$XDG_STATE_HOME/macbook91-cs4208/runs/`
-(by default `~/.local/state/macbook91-cs4208/runs/`) that survives a reboot,
-with a human report and a machine-readable result.
-Each test reports PASS, FAIL, BLOCKED, NOT_RUN or SKIPPED; a mandatory test
-that is never reached forces the verdict to INCOMPLETE rather than disappearing.
 
 ## What is proven, and what is not
 
@@ -221,8 +270,8 @@ are carried over from 20261020.03 and 20261020.01. The tarball differs from
 (the source identity string changes, `docs/CHANGELOG.md`). HDMI is outside the
 validated scope by choice: this machine is practically never connected to an
 external display. The amplifier I2C transport
-described in `docs/AMPLIFIER-PROTOCOL.md` is **not** a working instrument — it
-cannot tell an occupied I2C address from an empty one — so nothing is concluded
+described in `docs/AMPLIFIER-PROTOCOL.md` is **not** a working instrument: it
+cannot tell an occupied I2C address from an empty one, so nothing is concluded
 from it in either direction, and the amplifier bring-up stays off by default.
 
 ## History
@@ -238,6 +287,12 @@ before it is not published, and older releases are not part of this repository;
 `docs/CHANGELOG.md` lists every release and what changed in it. `release/` keeps
 only the promoted files of the newest versions (`packaging/promote-release.sh`
 prunes the rest).
+
+## Bug reports
+
+Open an issue at <https://github.com/Weegee/macbook91-cs4208-pub/issues>. Name
+the kernel (`uname -r`), the package version (`pacman -Q macbook91-cs4208-dkms`)
+and attach the output of `macbook91-audio-verify`.
 
 ## Provenance and licensing
 

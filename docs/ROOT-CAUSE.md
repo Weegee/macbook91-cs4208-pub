@@ -22,7 +22,7 @@ verbs, but it cannot invent a PCM on a converter the parser rejected.
 
 From `34-codec-dump-0.txt` of that baseline:
 
-```
+```text
 Node 0x0a [Audio Output] wcaps 0x46631: 8-Channels Digital Stripe
   Digital:
   PCM: rates [0x60]: 44100 48000   bits [0xe]: 16 20 24   formats [0x1]: PCM
@@ -36,7 +36,7 @@ Node 0x1d [Pin Complex] wcaps 0x406301: 8-Channels Digital
      0x0a
 ```
 
-```
+```text
 Node 0x02 [Audio Output] wcaps 0xd043d: Stereo Amp-Out Stripe
   Control: name="Line Out Playback Volume"
   Device: name="CS4208 Analog", type="Audio", device=0     <- the only PCM
@@ -59,7 +59,7 @@ other Macs; on this machine they are not the path in use.
 
 Kernel log, current boot:
 
-```
+```text
 snd_hda_codec_cs420x hdaudioC0D0: CS4208: picked fixup  for codec SSID 106b:0000
 snd_hda_codec_cs420x hdaudioC0D0: autoconfig for CS4208: line_outs=1 (0x1d/...) type:speaker
 snd_hda_codec_cs420x hdaudioC0D0:    speaker_outs=0 (0x0/...)
@@ -123,7 +123,7 @@ static const struct hda_quirk cs4208_mac_fixup_tbl[] = {
 That fallback is confirmed by the live GPIO state, which matches
 `cs4208_fixup_gpio0()` (`gpio_eapd_speaker = 1`, `mask = dir = 1`) exactly:
 
-```
+```text
 GPIO: io=6, o=2, i=0, unsolicited=1, wake=1
   IO[0]: enable=1, dir=1, wake=0, sticky=0, data=1, unsol=0
 ```
@@ -171,7 +171,7 @@ output (`line_outs=1 (0x1d) type:speaker`). It nevertheless produced a PCM on
 converter `0x02`, and the resulting control set contains **no
 `Speaker Playback Volume`/`Switch` at all**:
 
-```
+```text
 numid=1  'Line Out Playback Volume'      (node 0x02)
 numid=2  'Line Out Playback Switch'      (pin 0x10)
 numid=8  'Master Playback Volume'
@@ -213,7 +213,7 @@ The trace also confirms the wiring it is driving: at line 1049 it reads
 
 Decoding the two format words gives the exact stream contract:
 
-```
+```text
 0x4013 -> 44100 Hz, 16-bit, 4 channels   (converter 0x0a, speakers)
 0x4011 -> 44100 Hz, 16-bit, 2 channels   (converter 0x02, headphones)
 0x4031 -> 44100 Hz, 24-bit, 2 channels   (the macOS headphone format the

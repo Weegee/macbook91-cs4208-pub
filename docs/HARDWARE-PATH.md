@@ -59,7 +59,7 @@ affect any decision.
 
 **Live corroboration of the defect:** the stock driver enables only GPIO 0:
 
-```
+```text
 IO[0]: enable=1, dir=1, data=1      <- cs4208_fixup_gpio0(), EAPD
 IO[1]: enable=0 ... IO[5]: enable=0 <- DFET (4,5) and amp-fault (1) untouched
 ```
