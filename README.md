@@ -103,7 +103,10 @@ sudo pacman -U dist/macbook91-cs4208-dkms-*.pkg.tar.zst
 `make arch-pkg` assembles the upstream-derived sources at the newest kernel tag
 `packaging/upstream.lock` records for each supported series (six files per
 series from git.kernel.org, or none with `FETCH_ARGS="--offline --all"` and a
-filled cache), writes the source tarball, and builds the package in
+filled cache; if git.kernel.org does not answer, the fetcher prints one warning
+and takes the rest of the run from the GitHub mirror gregkh/linux, and
+`FETCH_ARGS="--source github"` or `--source kernel.org` picks one source),
+writes the source tarball, and builds the package in
 `build/arch/` (copied to `dist/`). It needs a committed tree whose tarball
 checksum is pinned in `packaging/arch/PKGBUILD`; `make arch-pkg-dev` builds an
 unreleased tree as it is on disk.

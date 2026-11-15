@@ -6,6 +6,32 @@ day); the last section summarises the earlier numbering. Only
 older release directories cited below were removed from it and the citations
 are history.
 
+## 20261115.01 (2026-11-15): the build fetches from a mirror when git.kernel.org does not answer
+
+**No driver behaviour change.** The module, the packaged tools, the hook and
+the install text are unchanged from 20261109.01; `diff -r` of the unpacked
+tarballs shows `README.md` and `VERSION` only. Built and tested in software;
+NOT RUN on hardware when this section was written
+(`docs/test-status.json`, `hw.runtime_20261115_01`).
+
+- `packaging/fetch-upstream.sh`: GitHub Actions runners could not reach
+  git.kernel.org (curl exit 28 after four attempts per file, and without a
+  connect timeout one file took eight minutes to fail), so the CI build failed.
+  The fetcher now tries git.kernel.org first with a connect timeout of 10
+  seconds. At the first failure it prints one warning and takes the rest of the
+  run from the GitHub mirror gregkh/linux, which carries the same tags. A
+  failure of both sources names both and exits with status 1, as before.
+- New option `--source auto|kernel.org|github` (default `auto`) picks one
+  source and turns the fallback off.
+- Unchanged: every fetched file is checked against `packaging/upstream.lock`
+  with the same hashes, and a wrong hash is a hard failure whichever source
+  delivered it. The fetch list is still the same six files per series.
+- `tests/run-tests.sh`: seven new checks for the fallback, with a fake curl and
+  an invented tree: kernel.org answers, kernel.org fails and the mirror serves
+  the rest, both fail, wrong bytes from the mirror, `--source github`,
+  `--source kernel.org` and an unknown source name. The check that the
+  fetcher names no other host now allows the mirror, and only the mirror.
+
 ## 20261109.01 (2026-11-09): documentation follows the house HIG, documentation part
 
 **No driver behaviour change.** The module, the packaged tools, the hook and

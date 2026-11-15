@@ -7,7 +7,10 @@
 # describe what this project changes, and this script reconstructs the rest:
 #
 #   fetched   sound/hda/codecs/cirrus/cs420x.c  and the five private HDA
-#             headers, from git.kernel.org, at one tag per kernel series.
+#             headers, from git.kernel.org, at one tag per kernel series. When
+#             git.kernel.org does not answer, the same paths come from the
+#             GitHub mirror gregkh/linux for the rest of the run; the hashes
+#             in upstream.lock decide what is accepted, not the source.
 #             With no option the tags are the newest ones upstream.lock
 #             records for each series; they are never guessed from whatever
 #             headers the building machine happens to have installed.
@@ -47,6 +50,9 @@ CACHE="$HERE/.upstream-cache"
 DEST="$SRC"
 
 BASE_URL='https://git.kernel.org/pub/scm/linux/kernel/git/stable/linux.git/plain'
+# Fallback: the GitHub mirror of the stable tree. Same tags, same bytes; the
+# lockfile check below is what makes that safe, and it is the same for both.
+MIRROR_URL='https://raw.githubusercontent.com/gregkh/linux'
 
 # The complete fetch list. Nothing outside it is ever downloaded.
 #   <path inside the module tree, without the series>:<path inside the kernel tree>
@@ -67,26 +73,30 @@ OPT_ALL=0
 OPT_OFFLINE=0
 OPT_ACCEPT_NEW=0
 OPT_PRINT_TAG=0
+OPT_SOURCE=auto
 
 PROG=fetch-upstream.sh
 
 die() { printf '%s: error: %s\n' "$PROG" "$*" >&2; exit 1; }
 note() { printf '%s\n' "$*" >&2; }
+warn() { printf '%s: warning: %s\n' "$PROG" "$*" >&2; }
 
 # Abweichung von HIL-4: the help ends with a pointer to the repository files and
 # not with the project URL, because tests/run-tests.sh pins this script to name
-# no host but git.kernel.org.
+# no host but git.kernel.org and its GitHub mirror.
 usage() {
 	cat <<'USAGE'
 Usage: fetch-upstream.sh [OPTIONS]
 
 Assemble the upstream-derived half of src/cs420x-a1534: fetch cs420x.c and the
-private HDA headers from git.kernel.org, check every file against
-packaging/upstream.lock and apply this project's patches.
+private HDA headers from git.kernel.org (or, when it does not answer, from the
+GitHub mirror gregkh/linux), check every file against packaging/upstream.lock
+and apply this project's patches.
 
 Examples:
   packaging/fetch-upstream.sh
   packaging/fetch-upstream.sh --offline --tag v7.2.6
+  packaging/fetch-upstream.sh --source github
   packaging/fetch-upstream.sh --print-tag --kver 7.2.6-1-cachyos
 
 Options:
@@ -98,6 +108,10 @@ Options:
                       (for example 7.2.6-1-cachyos)
       --dest DIR      assemble into DIR instead of src/cs420x-a1534
       --cache DIR     cache directory (default packaging/.upstream-cache)
+      --source NAME   download from kernel.org, from github (the mirror
+                      gregkh/linux) or from auto: kernel.org first, and the
+                      mirror for the rest of the run once kernel.org fails
+                      (default auto)
       --offline       use the cache only and never touch the network
       --accept-new    record a hash for a (tag, file) pair the lockfile does
                       not know yet; never overrides a pair it already knows
@@ -136,7 +150,7 @@ usage_error() {  # <message> [<option the user probably meant>]
 suggest_option() {
 	local want="${1%%=*}" o k
 	want=${want//-/}
-	for o in --all --tag --kver --dest --cache --offline --accept-new --print-tag --version --help; do
+	for o in --all --tag --kver --dest --cache --source --offline --accept-new --print-tag --version --help; do
 		k=${o//-/}
 		if [ "$k" = "$want" ] || [ "${k#"$want"}" != "$k" ] && [ ${#want} -ge 3 ]; then
 			printf '%s\n' "$o"
@@ -162,6 +176,13 @@ while [ $# -gt 0 ]; do
 		--kver) needs_value "$1" "$#"; OPT_KVER="$2"; shift 2 ;;
 		--dest) needs_value "$1" "$#"; DEST="$2"; shift 2 ;;
 		--cache) needs_value "$1" "$#"; CACHE="$2"; shift 2 ;;
+		--source)
+			needs_value "$1" "$#"
+			case "$2" in
+				auto|kernel.org|github) OPT_SOURCE="$2" ;;
+				*) usage_error "unknown source: $2" "--source auto" ;;
+			esac
+			shift 2 ;;
 		--offline) OPT_OFFLINE=1; shift ;;
 		--accept-new) OPT_ACCEPT_NEW=1; shift ;;
 		--print-tag) OPT_PRINT_TAG=1; shift ;;
@@ -299,6 +320,47 @@ other change."
 
 # ---------------------------------------------------------------- fetching
 
+# Where the next download goes. "auto" starts at kernel.org and moves to the
+# mirror at the first failure and stays there, so a blocked kernel.org costs
+# one timeout per run and not one per file.
+SOURCE_NOW=kernel.org
+[ "$OPT_SOURCE" != github ] || SOURCE_NOW=github
+
+fetch_from() {  # <kernel.org|github> <tag> <kernel path> <output file>
+	local url ct
+	case "$1" in
+		kernel.org) url="$BASE_URL/$3?h=$2"; ct=10 ;;
+		github)     url="$MIRROR_URL/$2/$3"; ct=20 ;;
+	esac
+	curl -fsSL --retry 3 --retry-delay 2 --connect-timeout "$ct" --max-time 120 \
+		-o "$4" "$url"
+}
+
+download() {  # <tag> <kernel path> <output file>: sets SOURCE_NOW, dies on failure
+	local tag="$1" kpath="$2" tmp="$3" rc=0 hint
+	fetch_from "$SOURCE_NOW" "$tag" "$kpath" "$tmp" || rc=$?
+	[ "$rc" -ne 0 ] || return 0
+	rm -f "$tmp"
+	if [ "$SOURCE_NOW" = kernel.org ] && [ "$OPT_SOURCE" = auto ]; then
+		warn "git.kernel.org did not deliver $kpath (curl exit $rc); using the GitHub mirror gregkh/linux"
+		SOURCE_NOW=github
+		rc=0
+		fetch_from github "$tag" "$kpath" "$tmp" || rc=$?
+		[ "$rc" -ne 0 ] || return 0
+		rm -f "$tmp"
+		hint="Tried git.kernel.org and the GitHub mirror gregkh/linux (last curl exit $rc)."
+	elif [ "$SOURCE_NOW" = github ]; then
+		hint="Tried the GitHub mirror gregkh/linux (curl exit $rc)."
+	else
+		hint="Tried git.kernel.org (curl exit $rc); --source github uses the GitHub mirror."
+	fi
+	die "fetch failed: $kpath at $tag.
+
+$hint
+Check the network. If $tag is not a released stable tag, this is expected;
+pass a --tag that is."
+}
+
 note "kernel tags:  ${TAGS[*]}"
 note "series:       ${SERIES_LIST[*]}"
 note "cache:        $CACHE"
@@ -318,11 +380,7 @@ for s in "${SERIES_LIST[@]}"; do
 			[ "$OPT_OFFLINE" = 1 ] && die "--offline, but $out is not in the cache"
 			note "fetch $kpath ($TAG)"
 			tmp="$out.part"
-			curl -fsSL --retry 3 --retry-delay 2 --max-time 120 \
-				-o "$tmp" "$BASE_URL/$kpath?h=$TAG" \
-				|| { rm -f "$tmp"; die "fetch failed: $kpath at $TAG.
-
-If $TAG is not a released stable tag, this is expected; pass a --tag that is."; }
+			download "$TAG" "$kpath" "$tmp"
 			[ -s "$tmp" ] || { rm -f "$tmp"; die "fetch returned an empty $kpath"; }
 			mv "$tmp" "$out"
 		fi
