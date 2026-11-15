@@ -17,7 +17,7 @@ pkgbase = macbook91-cs4208-dkms
 	conflicts = macbook91-cs4208
 	replaces = macbook91-cs4208
 	source = macbook91-cs4208-dkms-20261115.01.tar
-	sha256sums = db020044743953c1625c22b2151a61c66215ff7d27b6e26679d4d83f2b274bdd
+	sha256sums = cece271a356fbae03e8993dc4ee912b382a83423a200d5fb6a9069cd8a0afefb
 
 pkgname = macbook91-cs4208-dkms
 	depends = dkms

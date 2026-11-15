@@ -89,7 +89,7 @@ makedepends=('make')
 # inside the package and are enforced by the Makefile's `check` target, and
 # what they establish is integrity of the installed copy, not origin.
 source=("$pkgname-$pkgver.tar")
-sha256sums=('db020044743953c1625c22b2151a61c66215ff7d27b6e26679d4d83f2b274bdd')
+sha256sums=('cece271a356fbae03e8993dc4ee912b382a83423a200d5fb6a9069cd8a0afefb')
 
 # The installation itself is the root Makefile's `install` target, so the
 # same file list is used by this package and by anyone installing from the
