@@ -206,7 +206,7 @@ exactly why headphones always survived a resume.
 ```text
 src/cs420x-a1534/   the module: mainline cs420x.c plus a gated A1534 path
 tools/              measurement tools, one entry point: macbook91-runner
-tests/              336 hermetic tests, no root, no hardware, no sound
+tests/              343 hermetic tests, no root, no hardware, no sound
 packaging/          the fetcher, its lockfile, the tarball and release scripts
 packaging/arch/     PKGBUILD, .SRCINFO and the install scriptlet
 Makefile, VERSION   dist, install and package targets; the version
@@ -252,7 +252,7 @@ measured on hardware on 2026-10-20 (`macbook91-runner jackstream`,
 not been run. On 20261015.01 or earlier: end the call, or stop every playback
 and capture for a few seconds, and the next capture works again.
 
-**Not confirmed:** 20261109.01 (module code of 20261026.01) has not run on hardware, and no kernel of the 7.3
+**Not confirmed:** 20261115.01 (module code of 20261026.01) has not run on hardware, and no kernel of the 7.3
 series has run this module: it builds for 7.3.0-4-cachyos with no compiler
 diagnostic, nothing more. A kernel update within a series has happened, and
 DKMS rebuilt the module for it (2026-09-21, gate `hw.dkms_kernel_update`). A
