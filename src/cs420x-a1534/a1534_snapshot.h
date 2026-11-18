@@ -147,13 +147,13 @@ static void a1534_snapshot_log(struct hda_codec *codec,
 {
 	unsigned int i;
 
-	codec_info(codec,
-		   "A1534: firmware state (widget %#x): proc_state %#x, unsol %#x, 0x7f0 %#x, 0x7f1 %#x\n",
-		   CS4208_VENDOR_NID, snap->proc_state, snap->unsol,
-		   snap->vp0, snap->vp1);
+	codec_dbg(codec,
+		  "A1534: firmware state (widget %#x): proc_state %#x, unsol %#x, 0x7f0 %#x, 0x7f1 %#x\n",
+		  CS4208_VENDOR_NID, snap->proc_state, snap->unsol,
+		  snap->vp0, snap->vp1);
 	for (i = 0; i < A1534_NCOEF; i += 8)
-		codec_info(codec,
-			   "A1534: coef %02x: %04x %04x %04x %04x %04x %04x %04x %04x\n",
+		codec_dbg(codec,
+			  "A1534: coef %02x: %04x %04x %04x %04x %04x %04x %04x %04x\n",
 			   i,
 			   snap->coef[i],     snap->coef[i + 1],
 			   snap->coef[i + 2], snap->coef[i + 3],
