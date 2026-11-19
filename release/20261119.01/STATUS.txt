@@ -1,0 +1,47 @@
+macbook91-cs4208-dkms 20261119.01-1 - RELEASE (tag v20261119.01; shorter README, user and developer pages under docs/, short runner help; the module is unchanged; hardware NOT RUN)
+
+What changed: the full list is in docs/CHANGELOG.md.
+- tools/macbook91-runner: -h, --help and help print the options and the commands; with "all"
+  (--help all, help all) they print the full help including environment, files and exit status.
+  A script that reads those sections from --help must call --help all.
+- README.md is cut to 99 lines. The installation steps, the licence map, the per-release evidence
+  and the build and layout text moved to docs/INSTALL.md, docs/LICENSING.md, docs/WHAT-IS-PROVEN.md
+  and docs/entwicklung/BUILD.md; the suspend defect has docs/entwicklung/SUSPEND-DEFECT.md.
+- tests/run-tests.sh reads the README's test count from the prose line "N hermetic tests".
+- README.md and src/cs420x-a1534/README.md (part of the source tarball) name 20261119.01 in their
+  status lines.
+- The module code is that of 20261026.01; the fetcher, the hook, the install text and the packaged
+  tools other than the runner are those of 20261115.01.
+
+Hardware: NOT RUN for 20261119.01. Open, not verified: install of this package (pacman -U),
+macbook91-audio-verify on the LTS kernel and on 7.3 with the listening checks answered, the pacman
+hook output on the next transaction, and everything listed for 20261115.01 (hw.runtime_20261115_01),
+20261109.01 (hw.runtime_20261109_01), 20261102.01 (hw.runtime_20261102_01) and 20261026.01
+(hw.runtime_20261026_01). A build, a cache or a test run is not a hardware PASS. The maintainer
+authorized the release without the hardware gate. Also NOT RUN: the CI build of this release on a
+GitHub Actions runner; it shows whether the fetcher's fallback and the pipeline still work.
+
+Gates on the committed tree, run on 2026-11-19 on a development host under the 6.18.60-2-cachyos-lts
+kernel with the replacement module loaded (VERIFIED, each ran):
+- tests/run-tests.sh with the package built from this tree: 343 passed, 0 failed, 9 blocked (the
+  hardware checks it cannot run stay BLOCKED). docs/test-status.json and README.md record the same
+  totals.
+- make dist twice gives the tarball the PKGBUILD pins (sha256
+  b14e69eb14079e418dc31f2d075644403c7ef76d67a3165fb55d982168667725); the fetcher took every file
+  from git.kernel.org (no fallback warning) and checked it against packaging/upstream.lock. makepkg
+  --printsrcinfo equals .SRCINFO.
+- namcap on the package: 0 errors, 5 warnings explained in docs/NAMCAP.md; namcap on the
+  PKGBUILD: no output.
+- The promotion gate (the maintainer's extra test scripts and the scan for identifiers that must
+  not be published, over the files a commit carries) passed: 22 passed, 0 failed, 1 blocked; the
+  export guard found 0 hits.
+
+Release assets: the files listed in SHA256SUMS and SHA256SUMS itself, which
+are the text files of this directory and the source tarball. No built package
+is part of this release.
+
+Maintainer's local build of the package, for reference only. It is not
+published. The package records the build date and the build environment, so a
+package you build yourself will not have this checksum; the reproducible
+artifact is the source tarball in SHA256SUMS.
+d317494e1bd5f22174a8569529533ca0c5f8cb9aa45f9c1febb81dc178c96962  macbook91-cs4208-dkms-20261119.01-1-x86_64.pkg.tar.zst
