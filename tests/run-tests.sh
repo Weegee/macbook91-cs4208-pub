@@ -1326,7 +1326,7 @@ fi
 echo
 echo "== 4e. License identifiers =="
 
-# README.md's "Provenance and licensing" maps every path to a license, and the
+# docs/LICENSING.md "Provenance and licensing" maps every path to a license, and the
 # map holds only while the files say the same. Code built into the kernel
 # module, or with its headers, is GPL-2.0-or-later: GPL-3.0 cannot go into a
 # GPL-2.0-only kernel. So is what builds the module or assembles its sources,
@@ -3595,7 +3595,7 @@ else
 	# README.md's hand-written hermetic-test count must match the actual total,
 	# so a future suite change can no longer leave it stale (AC-008-11, R2-03).
 	README_MD="$ROOT/README.md"
-	STATED_COUNT=$(grep -oE 'tests/[[:space:]]+[0-9]+ hermetic tests' "$README_MD" | grep -oE '[0-9]+')
+	STATED_COUNT=$(grep -oE '[0-9]+ hermetic tests' "$README_MD" | grep -oE '[0-9]+')
 	if [ "$STATED_COUNT" = "$FINAL_COUNT" ]; then
 		ok "README.md's hermetic test count matches this run's actual count"
 	else

@@ -60,6 +60,9 @@ Confirmed on the machine: four-channel speakers from cold boot,
 headphones with hotplug, internal microphone, sound before and after a deep
 suspend, clean rollback, DKMS clang build.
 
+The suite in `tests/` has 343 hermetic tests; they need no root, no hardware
+and no sound, so they say nothing about the speakers themselves.
+
 Not confirmed: release 20261115.01 has not run on hardware, and no 7.3 kernel
 has run this module. A real call with a headset has not been run. HDMI is out
 of scope. Per release and per kernel: `docs/WHAT-IS-PROVEN.md`.
@@ -75,10 +78,6 @@ of scope. Per release and per kernel: `docs/WHAT-IS-PROVEN.md`.
 | build, tools, tests, release, layout | `docs/entwicklung/BUILD.md`, `docs/RELEASING.md`, `STRUCTURE.md` |
 | licenses, provenance, Apple driver research | `docs/LICENSING.md` |
 | the claims and what withdrew them | `docs/CLAIMS-AUDIT.md` |
-
-```text
-tests/              343 hermetic tests, no root, no hardware, no sound
-```
 
 ## AI assistance
 

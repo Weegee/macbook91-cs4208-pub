@@ -1,6 +1,6 @@
 # Project state
 
-Version 20261115.01 - updated 2026-11-15, adding the release 20261115.01 (fourth paragraph) to the state of 20261109.01, 20261102.01, 20261026.02 and 20261026.01 below.
+Version 20261115.01 - updated 2026-11-19 (README cut, pages moved under docs/), adding the release 20261115.01 (fourth paragraph) to the state of 20261109.01, 20261102.01, 20261026.02 and 20261026.01 below.
 
 **20261026.01 is promoted and released (`release/20261026.01/`, tag `v20261026.01` on the promote commit, 2026-10-26), built and gated in software; the hardware gate was not run.** Kernel series 7.3 (tag v7.3, for
 7.3.0-4-cachyos) is supported next to 6.18 (LTS) and 7.2. On a match the patched probe sets the A1534 fixup to
@@ -60,7 +60,7 @@ on-disk module (same source identity as before the reinstall). No new runtime ch
 **20261020.02 is promoted and released** (tag `v20261020.02`; published 2026-10-20 as a GitHub release with the
 package as asset). No driver change: the module's source identity stays
 `+79b16c8b296a3821`. It carries the license change of 2026-10-20 (own files GPL-3.0-or-later; the module, what
-builds it and what it derives from stay GPL-2.0; `README.md` "Provenance and licensing"), the corrections of
+builds it and what it derives from stay GPL-2.0; `docs/LICENSING.md` "Provenance and licensing"), the corrections of
 `vendored/PROVENANCE.md` and the translation of the remaining German text to English. Installed on the test machine on
 2026-10-20 (pacman -U exit 0, DKMS built it for 7.2.11-1-cachyos, on-disk module
 `20261020.02+79b16c8b296a3821`) but not loaded: no reboot since. No runtime check of the new modules was

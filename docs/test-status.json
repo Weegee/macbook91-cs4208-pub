@@ -1,6 +1,6 @@
 {
   "schema": 1,
-  "updated": "2026-11-15",
+  "updated": "2026-11-19",
   "kernel": "7.3.3-1-cachyos (development host, module 20261102.01 loaded; software gates of 20261115.01); 7.2.11-1-cachyos; 6.18.55-2-cachyos-lts (6.18 gate of 20261020.03)",
   "baseline": "20260914T050602Z (a local capture, not part of this repository)",
   "source_hash": "20261115.01",
@@ -317,7 +317,7 @@
     {
       "id": "regress.license_identifiers",
       "status": "PASS",
-      "note": "tests/run-tests.sh 4e, added 2026-10-20 (the GPL-2.0-or-later build files since the same day): every own file with comment syntax names on an SPDX line the license README.md's map gives it; LICENSE and LICENSES/ hold the GPL-3.0, GPL-2.0, LGPL-2.1 and BSD-3-Clause texts"
+      "note": "tests/run-tests.sh 4e, added 2026-10-20 (the GPL-2.0-or-later build files since the same day): every own file with comment syntax names on an SPDX line the license the map in docs/LICENSING.md gives it; LICENSE and LICENSES/ hold the GPL-3.0, GPL-2.0, LGPL-2.1 and BSD-3-Clause texts"
     },
     {
       "id": "regress.verifier_honesty",
