@@ -63,7 +63,7 @@ suspend, clean rollback, DKMS clang build.
 The suite in `tests/` has 343 hermetic tests; they need no root, no hardware
 and no sound, so they say nothing about the speakers themselves.
 
-Not confirmed: release 20261115.01 has not run on hardware, and no 7.3 kernel
+Not confirmed: release 20261119.01 has not run on hardware, and no 7.3 kernel
 has run this module. A real call with a headset has not been run. HDMI is out
 of scope. Per release and per kernel: `docs/WHAT-IS-PROVEN.md`.
 

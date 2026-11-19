@@ -6,6 +6,29 @@ day); the last section summarises the earlier numbering. Only
 older release directories cited below were removed from it and the citations
 are history.
 
+## 20261119.01 (2026-11-19): shorter README, user and developer pages under docs/, short runner help
+
+**No driver behaviour change.** The module, the hook, the install text and the
+fetcher are unchanged from 20261115.01. One output changed:
+`macbook91-runner --help` no longer prints the environment, the files and the
+exit status; they moved to `macbook91-runner --help all`. A script that reads
+those sections from `--help` must call `--help all`. Built and tested in
+software; NOT RUN on hardware when this section was written
+(`docs/test-status.json`, `hw.runtime_20261119_01`).
+
+- `tools/macbook91-runner`: `-h`, `--help` and `help` print the options and the
+  commands; with `all` next to them (`--help all`, `help all`) they print the full
+  help as before. The short help names `--help all` and the project address.
+- README: cut to 99 lines for every reader. The installation steps moved to
+  `docs/INSTALL.md`, the licence map to `docs/LICENSING.md`, the per-release and
+  per-kernel evidence to `docs/WHAT-IS-PROVEN.md`, and the build, tools, tests
+  and layout to `docs/entwicklung/BUILD.md`. The suspend defect has its own page,
+  `docs/entwicklung/SUSPEND-DEFECT.md`. The README links to each page.
+- `STRUCTURE.md`, `docs/RELEASING.md`, `docs/test-status.json` and a comment in
+  `tests/run-tests.sh` point at the new pages. The README's test count is read
+  from the prose line ("N hermetic tests") by `tests/run-tests.sh` and by
+  `private/export/verify-hooks.sh`.
+
 ## 20261115.01 (2026-11-15): the build fetches from a mirror when git.kernel.org does not answer
 
 **No driver behaviour change.** The module, the packaged tools, the hook and
