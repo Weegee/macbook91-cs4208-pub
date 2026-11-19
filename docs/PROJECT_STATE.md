@@ -1,6 +1,6 @@
 # Project state
 
-Version 20261115.01 - updated 2026-11-19 (README cut, pages moved under docs/), adding the release 20261115.01 (fourth paragraph) to the state of 20261109.01, 20261102.01, 20261026.02 and 20261026.01 below.
+Version 20261119.01 - updated 2026-11-19, adding the release 20261119.01 (fifth paragraph) to the state of 20261115.01, 20261109.01, 20261102.01, 20261026.02 and 20261026.01 below.
 
 **20261026.01 is promoted and released (`release/20261026.01/`, tag `v20261026.01` on the promote commit, 2026-10-26), built and gated in software; the hardware gate was not run.** Kernel series 7.3 (tag v7.3, for
 7.3.0-4-cachyos) is supported next to 6.18 (LTS) and 7.2. On a match the patched probe sets the A1534 fixup to
@@ -17,6 +17,8 @@ on 7.3, jack hotplug, suspend. The fixup pin and the jack re-route are verified 
 **20261102.01 is promoted and released (`release/20261102.01/`, tag `v20261102.01` on the promote commit, published 2026-11-02; the GitHub releases of both repositories list it, checked 2026-11-09). Built and gated in software; the hardware gate was not run: audit findings of the text interfaces.** The release commit holds `VERSION`, `docs/CHANGELOG.md`, the pinned tarball and `.SRCINFO`; `make arch-pkg` built `dist/macbook91-cs4208-dkms-20261102.01-1-x86_64.pkg.tar.zst` on a development host that runs the stock codec, offline, from a fetcher cache filled from the 20261026.02 tarball (the fetcher checked every file against `packaging/upstream.lock`; the new tarball differs from the old one in `VERSION`, the verifier, `kernel-series` and `src/cs420x-a1534/README.md` only). `tests/run-tests.sh`, `namcap` and ShellCheck ran on the committed tree (`regress.suite`, `docs/NAMCAP.md`). The module is unchanged. What changed: help lines and messages of the verifier, the rollback command of the install text (`sudo pacman -R`), `promote-release.sh` (the deletion of old release directories is named, status messages go to stderr), the recovery hints and the state directory of `macbook91-runner` and `dev-audio-collect.sh` (`$XDG_STATE_HOME`, the sudo user's home from the account database), eight new checks in section 7f. Deviations stay named in the code (TXT-8 in the install scriptlet; FEH-2 and NAM-1 in `kernel-series`). `regress.suite` for this version is derived for a host with the module loaded (336 passed, 0 failed, 9 blocked) and was measured on a stock-codec host (335, 0, 10); the next run on a host with the module loaded settles it. Hardware: NOT RUN (`hw.runtime_20261102_01`); the gate of `docs/RELEASING.md` section 4 is kept as a pointer: install, one `macbook91-audio-verify` run with the listening checks, the hook output on the next transaction.
 
 **20261115.01 is promoted and released (`release/20261115.01/`, tag `v20261115.01` on the promote commit, published 2026-11-15). Built and gated in software; the hardware gate was not run: the fetcher falls back to the GitHub mirror.** The CI build in the pipeline of the package repository could not reach git.kernel.org from the GitHub Actions runners (curl exit 28), so `packaging/fetch-upstream.sh` now tries git.kernel.org with a connect timeout of 10 seconds and, at the first failure, takes the rest of the run from the GitHub mirror gregkh/linux (`--source auto|kernel.org|github`). The lockfile check is unchanged and decides what is accepted. The module, the packaged tools, the hook and the install text are those of 20261109.01; the tarball differs from that of 20261109.01 in `VERSION` and `README.md` only. `make arch-pkg` built `dist/macbook91-cs4208-dkms-20261115.01-1-x86_64.pkg.tar.zst`; `tests/run-tests.sh` ran on the clean committed tree with that package (`regress.suite`), `namcap` on the package and the PKGBUILD (`docs/NAMCAP.md`). Hardware: NOT RUN (`hw.runtime_20261115_01`); the gate of `docs/RELEASING.md` section 4 is kept as a pointer: install, one `macbook91-audio-verify` run with the listening checks, the hook output on the next transaction.
+
+**20261119.01 is promoted (`release/20261119.01/`, tag `v20261119.01` on the promote commit). Built and gated in software; the hardware gate was not run: shorter README, user and developer pages under `docs/`, short runner help.** The README is cut to 99 lines for every reader; the installation steps, the licence map, the per-release evidence and the build and layout text moved to `docs/INSTALL.md`, `docs/LICENSING.md`, `docs/WHAT-IS-PROVEN.md` and `docs/entwicklung/BUILD.md`, and the suspend defect has its own page (`docs/entwicklung/SUSPEND-DEFECT.md`). `macbook91-runner --help` prints the options and the commands, `--help all` the full help including environment, files and exit status. The module, the packaged tools other than the runner, the hook, the install text and the fetcher are those of 20261115.01. `make arch-pkg` built `dist/macbook91-cs4208-dkms-20261119.01-1-x86_64.pkg.tar.zst`; `tests/run-tests.sh` ran on the committed tree with that package (`regress.suite`), `namcap` on the package and the PKGBUILD (`docs/NAMCAP.md`). Hardware: NOT RUN (`hw.runtime_20261119_01`); the gate of `docs/RELEASING.md` section 4 is kept as a pointer: install, one `macbook91-audio-verify` run with the listening checks, the hook output on the next transaction.
 
 **20261109.01 is promoted and released (`release/20261109.01/`, tag `v20261109.01` on the promote commit, published 2026-11-09). Built and gated in software; the hardware gate was not run: the documentation follows the house HIG, documentation part.** Only Markdown files changed (`README.md`, `docs/`, `src/cs420x-a1534/README.md`, `tools/README-macos-extraction.md`); the module, the packaged tools, the hook and the install text are those of 20261102.01. The tarball differs from that of 20261102.01 in `VERSION` and `src/cs420x-a1534/README.md` only. `make arch-pkg` built `dist/macbook91-cs4208-dkms-20261109.01-1-x86_64.pkg.tar.zst` on the development host (kernel 7.3.3-1-cachyos, module 20261102.01 loaded). `tests/run-tests.sh` ran on a clean copy of the committed tree with that package (`regress.suite`), `namcap` and ShellCheck on the package and the scripts (`docs/NAMCAP.md`). What changed: the README installation is a numbered procedure with a check and a way back, the CHANGELOG headings carry ISO dates and name incompatible changes first, every code block has a language, and the stale statements about 20261102.01 and the 2026-10-19 incident are corrected. Hardware: NOT RUN (`hw.runtime_20261109_01`); the gate of `docs/RELEASING.md` section 4 is kept as a pointer: install, one `macbook91-audio-verify` run with the listening checks, the hook output on the next transaction.
 
@@ -176,13 +178,17 @@ Read only; no verifier run, no sound.
 
 ## Deliverable
 
-**Current promoted package:** `macbook91-cs4208-dkms 20261115.01-1` (`release/20261115.01/`)
+**Current promoted package:** `macbook91-cs4208-dkms 20261119.01-1` (`release/20261119.01/`)
+- **PROMOTED** (tag `v20261119.01` on the promote commit): shorter README, user and developer pages under `docs/`, short runner help,
+no module change; hardware NOT RUN. See `release/20261119.01/STATUS.txt`.
+
+Previous release: `macbook91-cs4208-dkms 20261115.01-1` (`release/20261115.01/`)
 - **RELEASED** (tag `v20261115.01` on the promote commit, published 2026-11-15): the fetcher falls back to the GitHub mirror
 when git.kernel.org does not answer, no module change; hardware NOT RUN. See `release/20261115.01/STATUS.txt`.
 
-Previous release: `macbook91-cs4208-dkms 20261109.01-1` (`release/20261109.01/`)
-- **RELEASED** (tag `v20261102.01`, published 2026-11-02): audit findings of the text interfaces, no module change; hardware NOT RUN.
-See `release/20261102.01/STATUS.txt`.
+Before that `20261109.01`, tag `v20261109.01`, published 2026-11-09: documentation follows the house HIG, documentation part, no module change;
+hardware NOT RUN; its release directory was pruned by `promote-release.sh`. Before that `20261102.01`, tag `v20261102.01`, published 2026-11-02:
+audit findings of the text interfaces, no module change; hardware NOT RUN; pruned as well.
 
 Before that `20261026.02`, tag `v20261026.02`, published 2026-10-26: text interfaces follow the house HIG (text part), no module change;
 hardware NOT RUN (released without the gate by the maintainer's decision); its release directory was pruned by `promote-release.sh`.
@@ -251,9 +257,9 @@ line is present like all the others.
 
 ## Exact next action
 
-**20261115.01 is promoted, tagged and published** (`docs/RELEASING.md` sections 5 and 6), without the hardware gate. At the maintainer's pace: install it,
+**20261119.01 is promoted** (`docs/RELEASING.md` section 5), without the hardware gate; tag and publication follow (section 6). At the maintainer's pace: install it,
 run `macbook91-audio-verify` with the listening checks on the LTS kernel and record the result in `docs/test-status.json`
-(`hw.runtime_20261115_01`; `hw.runtime_20261109_01` and `hw.runtime_20261102_01` are open as well, the module code is the same).
+(`hw.runtime_20261119_01`; `hw.runtime_20261115_01`, `hw.runtime_20261109_01` and `hw.runtime_20261102_01` are open as well, the module code is the same).
 
 **20261026.02 is promoted, tagged and published** (`docs/RELEASING.md` sections 5 and 6), without the hardware gate. At the maintainer's pace: install it, run `macbook91-audio-verify` with the listening checks on the LTS kernel and record the result in `docs/test-status.json` (`hw.runtime_20261026_02`).
 
@@ -322,9 +328,9 @@ again on 2026-10-20 under 20261020.01 (PASS, first row of the table above).
 
 ## Artifacts
 
-* Built package: `macbook91-cs4208-dkms-20261115.01-1-x86_64.pkg.tar.zst`
+* Built package: `macbook91-cs4208-dkms-20261119.01-1-x86_64.pkg.tar.zst`
   (untracked, kept in `dist/`, not published and not a release asset); its checksum is
-  in `release/20261115.01/STATUS.txt` for reference only. `release/` holds the newest promoted
+  in `release/20261119.01/STATUS.txt` for reference only. `release/` holds the newest promoted
   release (and the one before it, once there is one); older releases are not
   part of this repository, and `promote-release.sh` prunes them rather than a
   human remembering to.

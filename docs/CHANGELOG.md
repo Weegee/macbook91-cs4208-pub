@@ -2,7 +2,7 @@
 
 Versions have the form YYYYMMDD.NN (release date, NN counts releases that
 day); the last section summarises the earlier numbering. Only
-`release/20261102.01/` and `release/20261109.01/` are part of this repository;
+`release/20261115.01/` and `release/20261119.01/` are part of this repository;
 older release directories cited below were removed from it and the citations
 are history.
 
@@ -25,9 +25,8 @@ software; NOT RUN on hardware when this section was written
   and layout to `docs/entwicklung/BUILD.md`. The suspend defect has its own page,
   `docs/entwicklung/SUSPEND-DEFECT.md`. The README links to each page.
 - `STRUCTURE.md`, `docs/RELEASING.md`, `docs/test-status.json` and a comment in
-  `tests/run-tests.sh` point at the new pages. The README's test count is read
-  from the prose line ("N hermetic tests") by `tests/run-tests.sh` and by
-  `private/export/verify-hooks.sh`.
+  `tests/run-tests.sh` point at the new pages. `tests/run-tests.sh` reads the
+  README's test count from the prose line ("N hermetic tests").
 
 ## 20261115.01 (2026-11-15): the build fetches from a mirror when git.kernel.org does not answer
 
