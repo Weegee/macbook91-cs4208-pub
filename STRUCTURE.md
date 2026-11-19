@@ -1,7 +1,7 @@
 Structure version: 20261021.01
 
-Layout rules for this repository. The README describes the same directories
-for a reader; this file is the rule.
+Layout rules for this repository. `docs/entwicklung/BUILD.md` describes the build
+for a developer; this file is the layout rule.
 
 src/cs420x-a1534/   the DKMS module. This directory is what ships: it is
                     copied verbatim to /usr/src/macbook91-cs4208-<pkgver>,
@@ -37,8 +37,8 @@ Makefile, VERSION   the package contract: `make dist` writes the
 LICENSE, LICENSES/  since 20261020.02 LICENSE is the GPL-3.0 text and
                     LICENSES/ holds the texts of the other licenses used
                     here, one file per SPDX identifier; the source tarball
-                    carries every text its files need. README.md's
-                    "Provenance and licensing" maps every path to its
+                    carries every text its files need. docs/LICENSING.md
+                    ("Provenance and licensing") maps every path to its
                     license; a file that can carry a comment names its own
                     on an SPDX-License-Identifier line.
 packaging/          the scripts that fetch (fetch-upstream.sh), write the

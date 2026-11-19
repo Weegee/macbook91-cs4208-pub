@@ -66,7 +66,7 @@ pinned tarball. Then, all on the committed tree:
 
 - `bash tests/run-tests.sh` with the tree assembled and the package built: 0
   failed. The hardware checks it cannot run stay BLOCKED. The totals recorded
-  in `docs/test-status.json` (`regress.suite`) and `README.md` are those of a
+  in `docs/test-status.json` (`regress.suite`) and in the README are those of a
   host with the replacement module loaded; `regress.suite` also states what a
   host running the stock codec reports, which runs one more test and blocks
   the two checks that compare these records.

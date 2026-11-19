@@ -159,9 +159,18 @@ Options:
   --disarm LIST      wake: switch these wake sources off, for example
                      RP09,XHC1, and restore them exactly afterwards (root)
   --card N           use ALSA card N; it must carry the CS4208
-  -h, --help         show this help
+  -h, --help [all]   show this help; with all, the full help
   -V, --version      show the version
 
+More: macbook91-runner --help all   environment, files, exit status
+Docs and bug reports: https://github.com/Weegee/macbook91-cs4208-pub
+USAGE
+}
+
+# The rest of the help: environment, files and exit status.
+usage_all() {
+	usage | sed -e '/^More: /d' -e '/^Docs and bug reports: /d'
+	cat <<USAGE_ALL
 Environment:
   XDG_STATE_HOME        base of the state directory (default ~/.local/state;
                         under sudo, in the home of the user who ran sudo)
@@ -182,7 +191,7 @@ Exit status:
   143  terminated with SIGTERM; the machine state is restored first
 
 Docs and bug reports: https://github.com/Weegee/macbook91-cs4208-pub
-USAGE
+USAGE_ALL
 }
 
 # The command a mistyped one most likely meant, for the error message (HIL-6).
@@ -1115,17 +1124,23 @@ cmd_report() {
 
 COMMAND=${1:-}
 shift || true
-# -h and --version win wherever they stand (HIL-1, HIL-2).
+# -h and --version win wherever they stand (HIL-1, HIL-2); "all" next to
+# the help flag or the help command prints the full help.
+HELP_ALL=0
+for a in "$COMMAND" "$@"; do
+	[ "$a" = all ] && HELP_ALL=1
+done
+help_out() { if [ "$HELP_ALL" = 1 ]; then usage_all; else usage; fi; }
 for a in "$COMMAND" "$@"; do
 	case $a in
-		-h|--help) usage; exit 0 ;;
+		-h|--help) help_out; exit 0 ;;
 		-V|--version) printf 'macbook91-runner %s\n' "$VERSION"; exit 0 ;;
 	esac
 done
 case $COMMAND in
 	selfcheck|preflight|probe|cycle|wake|jackstream) ;;
 	report|diff) : ;;
-	help) usage; exit 0 ;;
+	help) help_out; exit 0 ;;
 	"") usage_error "no command given" ;;
 	*) usage_error "unknown command '$COMMAND'" "$(suggest_command "$COMMAND")" ;;
 esac
