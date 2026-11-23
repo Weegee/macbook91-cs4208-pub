@@ -36,7 +36,8 @@ comments record the decision: they document what was actually run, and
 nothing new should be added to them. Each carries a `SUPERSEDED` banner at
 the top of its own header naming the `macbook91-runner` subcommand (or, for
 `macbook91-speaker-probe` and `macbook91-resume-experiment`, the gate id) that
-replaced it.
+replaced it. They have no `--help`, and some print a Python traceback on an
+expected error such as a missing permission; run the replacement instead.
 
 | Tool | Superseded by | Retired |
 | --- | --- | --- |
