@@ -81,8 +81,7 @@ upgrade, check the kernels you use with `macbook91-audio-verify`.
   for PCI subsystem 8086:7270 select CS4208_MBA6 (speaker pin unconnected); the
   probe now sets CS4208_GPIO0 first, on every series. After the headphone
   replay a running stream follows the jack state.
-- `kheaders/KERNEL-SERIES` drives `dkms.conf`, a new pacman hook that warns
-  about unsupported kernels and a new verifier check.
+- One series list (`kheaders/KERNEL-SERIES`), a pacman hook and a verifier check.
 - Source identity: 6.18 `c7580fd7...`, 7.2 `c6661a7c...`, 7.3 `6a7014b2...`.
 
 ## 20261021.01 (2026-10-21): first public release; comments, attribution, licence headers and non-code files only
